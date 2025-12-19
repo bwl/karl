@@ -21,6 +21,9 @@ pub struct CliffyConfig {
     pub volley: VolleyConfig,
     #[serde(default)]
     pub stacks: HashMap<String, StackConfig>,
+    // Extra fields like 'options' that might exist in user configs
+    #[serde(flatten)]
+    pub extra: HashMap<String, serde_json::Value>,
 }
 
 fn default_model() -> String {
@@ -31,15 +34,21 @@ fn default_model() -> String {
 pub struct ModelConfig {
     pub provider: String,
     pub model: String,
+    // Extra fields like max_tokens that might exist in user configs
+    #[serde(flatten)]
+    pub extra: std::collections::HashMap<String, serde_json::Value>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
 pub struct ProviderConfig {
-    #[serde(rename = "type")]
+    #[serde(rename = "type", default)]
     pub provider_type: String,
     pub base_url: Option<String>,
     pub api_key: Option<String>,
+    // Extra fields that might exist in user configs - ignore them
+    #[serde(flatten)]
+    pub extra: std::collections::HashMap<String, serde_json::Value>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -148,8 +157,9 @@ pub fn save_config(config: &CliffyConfig, path: &Path) -> Result<()> {
 }
 
 /// Get global config path
+/// Uses ~/.config/cliffy/ for XDG compatibility (same as cliffy CLI)
 pub fn global_config_path() -> Option<PathBuf> {
-    dirs::config_dir().map(|p| p.join("cliffy").join("cliffy.json"))
+    dirs::home_dir().map(|p| p.join(".config").join("cliffy").join("cliffy.json"))
 }
 
 /// Get project config path
@@ -225,11 +235,12 @@ pub fn discover_skills() -> Vec<SkillInfo> {
 }
 
 /// Get skill discovery paths
+/// Uses ~/.config/cliffy/ for XDG compatibility
 fn skill_paths() -> Vec<PathBuf> {
     let mut paths = vec![];
 
-    if let Some(config_dir) = dirs::config_dir() {
-        paths.push(config_dir.join("cliffy").join("skills"));
+    if let Some(home_dir) = dirs::home_dir() {
+        paths.push(home_dir.join(".config").join("cliffy").join("skills"));
     }
 
     paths.push(PathBuf::from(".cliffy").join("skills"));
@@ -326,11 +337,12 @@ pub fn discover_stacks(config: &CliffyConfig) -> Vec<(String, StackConfig, Strin
 }
 
 /// Get stack discovery paths
+/// Uses ~/.config/cliffy/ for XDG compatibility
 fn stack_paths() -> Vec<PathBuf> {
     let mut paths = vec![];
 
-    if let Some(config_dir) = dirs::config_dir() {
-        paths.push(config_dir.join("cliffy").join("stacks"));
+    if let Some(home_dir) = dirs::home_dir() {
+        paths.push(home_dir.join(".config").join("cliffy").join("stacks"));
     }
 
     paths.push(PathBuf::from(".cliffy").join("stacks"));
@@ -393,11 +405,12 @@ pub fn discover_hooks() -> Vec<HookInfo> {
 }
 
 /// Get hook discovery paths
+/// Uses ~/.config/cliffy/ for XDG compatibility
 fn hook_paths() -> Vec<PathBuf> {
     let mut paths = vec![];
 
-    if let Some(config_dir) = dirs::config_dir() {
-        paths.push(config_dir.join("cliffy").join("hooks"));
+    if let Some(home_dir) = dirs::home_dir() {
+        paths.push(home_dir.join(".config").join("cliffy").join("hooks"));
     }
 
     paths.push(PathBuf::from(".cliffy").join("hooks"));

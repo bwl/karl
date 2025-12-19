@@ -933,6 +933,7 @@ impl App {
         let config = ModelConfig {
             provider: form.provider.value.trim().to_string(),
             model: form.model.value.trim().to_string(),
+            extra: std::collections::HashMap::new(),
         };
 
         // If editing and alias changed, remove old entry
