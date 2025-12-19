@@ -66,12 +66,26 @@ export interface VolleyConfig {
   retryBackoff: 'exponential' | 'linear';
 }
 
+export interface StackConfig {
+  name?: string;              // Optional, inferred from filename/key
+  extends?: string;           // Parent stack to inherit from
+  model?: string;             // Model name or alias
+  temperature?: number;       // 0-1
+  timeout?: number;           // ms
+  maxTokens?: number;         // Token limit
+  skill?: string;             // Skill name to load
+  context?: string;           // Inline context
+  contextFile?: string;       // Path to context file
+  unrestricted?: boolean;     // Bypass guardrails
+}
+
 export interface CliffyConfig {
   defaultModel: string;
   models: Record<string, ModelConfig>;
   providers: Record<string, ProviderConfig>;
   tools: ToolsConfig;
   volley: VolleyConfig;
+  stacks?: Record<string, StackConfig>;
 }
 
 export interface CliOptions {
@@ -90,6 +104,9 @@ export interface CliOptions {
   context?: string;
   contextFile?: string;
   tasksFile?: string;
+  stack?: string;             // Config stack name (via "as" syntax)
+  temperature?: number;       // Temperature override
+  maxTokens?: number;         // Max tokens override
 }
 
 export interface SchedulerOptions {

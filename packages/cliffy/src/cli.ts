@@ -12,9 +12,11 @@ import { CliOptions } from './types.js';
 import { formatError, parseDurationMs, readTextIfExists } from './utils.js';
 import { getAnthropicAccessToken, runLoginFlow } from './oauth.js';
 import { Spinner } from './spinner.js';
+import { loadStack } from './stacks.js';
 
 async function printHelp(): Promise<void> {
   const help = `cliffy [flags] <task> [task...]
+cliffy as <stack> <task> [task...]
 
 Flags:
   --fast, -f           Use the fast model
@@ -38,6 +40,12 @@ Flags:
   --help, -h           Show help
   --version            Show version
 
+Config Stacks:
+  cliffy as <stack> <task>        Run with a named config stack
+  cliffy stacks list              List available stacks
+  cliffy stacks show <name>       Show stack details
+  cliffy stacks create <name>     Create a new stack
+
 Skills Commands:
   cliffy skills list              List available skills
   cliffy skills show <name>       Show skill details
@@ -46,10 +54,12 @@ Skills Commands:
 
 Examples:
   cliffy "fix the bug in parser.go"
+  cliffy as codex52-architect "review spec and create implementation plan"
+  cliffy as trivia-expert "circumference of earth in miles"
   cliffy --skill security-review "analyze this codebase"
   cliffy --fast "what does this function do?" "test the auth flow"
+  cliffy stacks list
   cliffy skills list
-  cliffy skills create my-custom-skill --description "Custom workflow"
 `;
   console.log(help);
 }
@@ -185,8 +195,8 @@ async function loadVersion(): Promise<string> {
 }
 
 async function main() {
-  const args = process.argv.slice(2);
-  
+  let args = process.argv.slice(2);
+
   // Handle skills commands
   if (args[0] === 'skills') {
     const { handleSkillsCommand } = await import('./commands/skills.js');
@@ -194,7 +204,26 @@ async function main() {
     return;
   }
 
+  // Handle stacks commands
+  if (args[0] === 'stacks') {
+    const { handleStacksCommand } = await import('./commands/stacks.js');
+    await handleStacksCommand(args.slice(1));
+    return;
+  }
+
+  // Handle "as <stack>" syntax: cliffy as trivia-expert "question"
+  let stackName: string | undefined;
+  if (args[0] === 'as' && args.length >= 2) {
+    stackName = args[1];
+    args = args.slice(2);  // Remove "as" and stack name, keep rest
+  }
+
   const { options, tasks: rawTasks, wantsHelp, wantsVersion, wantsLogin, wantsLogout } = parseArgs(args);
+
+  // Set stack name in options if provided via "as" syntax
+  if (stackName) {
+    options.stack = stackName;
+  }
 
   if (wantsHelp) {
     await printHelp();
@@ -220,7 +249,20 @@ async function main() {
 
   const cwd = process.cwd();
   const config = await loadConfig(cwd);
-  const resolvedModel = resolveModel(config, options);
+
+  // Load and merge stack config if specified
+  let effectiveOptions = options;
+  if (options.stack) {
+    try {
+      effectiveOptions = await loadStack(options.stack, config, options);
+    } catch (error) {
+      console.error(`Failed to load stack "${options.stack}": ${(error as Error).message}`);
+      process.exitCode = 1;
+      return;
+    }
+  }
+
+  const resolvedModel = resolveModel(config, effectiveOptions);
   
   // Try to get API key: env var first, then OAuth
   let apiKey = resolvedModel.providerConfig.apiKey;
@@ -247,7 +289,7 @@ async function main() {
   
   const hooks = await HookRunner.load(cwd);
 
-  const tasksFromFile = options.tasksFile ? await readTasksFile(options.tasksFile, cwd) : [];
+  const tasksFromFile = effectiveOptions.tasksFile ? await readTasksFile(effectiveOptions.tasksFile, cwd) : [];
   const tasks: (string | null)[] = [...rawTasks, ...tasksFromFile];
 
   const needsStdin = tasks.some((task) => task === null) || (tasks.length === 0 && !process.stdin.isTTY);
@@ -271,34 +313,34 @@ async function main() {
     throw new Error('No tasks provided.');
   }
 
-  if (options.maxConcurrent !== undefined && (!Number.isFinite(options.maxConcurrent) || options.maxConcurrent < 1)) {
+  if (effectiveOptions.maxConcurrent !== undefined && (!Number.isFinite(effectiveOptions.maxConcurrent) || effectiveOptions.maxConcurrent < 1)) {
     throw new Error('Invalid --max-concurrent value.');
   }
 
   const systemPrompt = await buildSystemPrompt({
     cwd,
-    skill: options.skill,
-    context: options.context,
-    contextFile: options.contextFile,
-    unrestricted: options.unrestricted
+    skill: effectiveOptions.skill,
+    context: effectiveOptions.context,
+    contextFile: effectiveOptions.contextFile,
+    unrestricted: effectiveOptions.unrestricted
   });
 
   const state = initState(finalTasks);
-  const useTui = options.tui ?? false;
+  const useTui = effectiveOptions.tui ?? false;
   const tui = await createTuiRenderer(useTui);
-  const useVerbose = options.verbose && !useTui && !options.json;
-  const spinner = new Spinner(!useTui && !options.json, useVerbose);
-  
+  const useVerbose = effectiveOptions.verbose && !useTui && !effectiveOptions.json;
+  const spinner = new Spinner(!useTui && !effectiveOptions.json, useVerbose);
+
   if (useTui) {
     tui.update(state);
   }
 
   const scheduler = new VolleyScheduler(
     {
-      maxConcurrent: options.maxConcurrent ?? config.volley.maxConcurrent,
+      maxConcurrent: effectiveOptions.maxConcurrent ?? config.volley.maxConcurrent,
       retryAttempts: config.volley.retryAttempts,
       retryBackoff: config.volley.retryBackoff,
-      timeoutMs: options.timeoutMs
+      timeoutMs: effectiveOptions.timeoutMs
     },
     (event) => {
       applyEvent(state, event);
@@ -329,9 +371,9 @@ async function main() {
         systemPrompt,
         hooks,
         toolsConfig: config.tools,
-        noTools: options.noTools,
-        unrestricted: options.unrestricted,
-        timeoutMs: options.timeoutMs,
+        noTools: effectiveOptions.noTools,
+        unrestricted: effectiveOptions.unrestricted,
+        timeoutMs: effectiveOptions.timeoutMs,
         onEvent: (event) => {
           applyEvent(state, event);
           if (useTui) {
@@ -356,9 +398,9 @@ async function main() {
 
   if (results) {
     printResults(results, {
-      json: options.json,
-      verbose: options.verbose,
-      stats: options.stats
+      json: effectiveOptions.json,
+      verbose: effectiveOptions.verbose,
+      stats: effectiveOptions.stats
     });
   }
 }
