@@ -2,7 +2,7 @@
 
 **The fastest way to get LLM intelligence into your terminal.**
 
-Status: active
+![Agent Skills](https://img.shields.io/badge/Agent%20Skills-Supported-brightgreen) ![Status](https://img.shields.io/badge/Status-Active-brightgreen)
 
 ```
 $ cliffy "how much energy from the sun reaches Earth each day?"
@@ -201,39 +201,46 @@ Tools are loaded at startup. No recompilation needed.
 
 ---
 
-## Skills (Loadable Modes)
+## Agent Skills Support 🎯
 
-Skills are instruction sets for specialized tasks. Activate with `--skill`:
+Cliffy fully supports the [Agent Skills](https://agentskills.io) open standard for extending AI capabilities with specialized knowledge and workflows.
+
+### Using Skills
 
 ```bash
-cliffy --skill security "review this codebase"
-cliffy --skill rust "implement a CLI parser"
-cliffy --skill docs "document the public API"
+cliffy --skill security-review "analyze this codebase for vulnerabilities"
+cliffy --skill code-review "review the changes in auth.go"
+cliffy --skill documentation "create API docs for the user service"
 ```
 
-Skills live in `~/.config/cliffy/skills/`:
+### Managing Skills
 
-```markdown
-<!-- ~/.config/cliffy/skills/security.md -->
-# Security Review Skill
+```bash
+# List available skills
+cliffy skills list
 
-You are a security expert reviewing code for vulnerabilities.
+# Show skill details
+cliffy skills show security-review
 
-## Focus Areas
-- SQL injection, XSS, CSRF
-- Authentication and authorization flaws
-- Secrets in code or logs
-- Dependency vulnerabilities
+# Create a new skill
+cliffy skills create my-workflow --description "Custom analysis workflow"
 
-## Output Format
-For each issue found:
-1. Severity (critical/high/medium/low)
-2. Location (file:line)
-3. Description
-4. Remediation
+# Validate a skill
+cliffy skills validate ./path/to/skill
 ```
 
-Skills prepend to the system prompt. They're just markdown files.
+### Built-in Skills
+
+- **security-review**: Comprehensive security analysis and vulnerability scanning
+- **code-review**: Code quality assessment and best practices validation  
+- **documentation**: Technical documentation creation (APIs, guides, READMEs)
+
+### Skill Locations
+
+- `~/.config/cliffy/skills/` - Global skills
+- `./.cliffy/skills/` - Project-specific skills
+
+Skills use the standard Agent Skills format with YAML frontmatter and are fully portable across Agent Skills-compatible tools. See [AGENT_SKILLS.md](packages/cliffy/AGENT_SKILLS.md) for complete documentation.
 
 ---
 

@@ -37,6 +37,19 @@ Flags:
   --logout             Clear OAuth credentials
   --help, -h           Show help
   --version            Show version
+
+Skills Commands:
+  cliffy skills list              List available skills
+  cliffy skills show <name>       Show skill details
+  cliffy skills create <name>     Create a new skill template
+  cliffy skills validate <path>   Validate a skill
+
+Examples:
+  cliffy "fix the bug in parser.go"
+  cliffy --skill security-review "analyze this codebase"
+  cliffy --fast "what does this function do?" "test the auth flow"
+  cliffy skills list
+  cliffy skills create my-custom-skill --description "Custom workflow"
 `;
   console.log(help);
 }
@@ -172,7 +185,16 @@ async function loadVersion(): Promise<string> {
 }
 
 async function main() {
-  const { options, tasks: rawTasks, wantsHelp, wantsVersion, wantsLogin, wantsLogout } = parseArgs(process.argv.slice(2));
+  const args = process.argv.slice(2);
+  
+  // Handle skills commands
+  if (args[0] === 'skills') {
+    const { handleSkillsCommand } = await import('./commands/skills.js');
+    await handleSkillsCommand(args.slice(1));
+    return;
+  }
+
+  const { options, tasks: rawTasks, wantsHelp, wantsVersion, wantsLogin, wantsLogout } = parseArgs(args);
 
   if (wantsHelp) {
     await printHelp();
