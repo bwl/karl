@@ -857,9 +857,9 @@ fn draw_settings(f: &mut Frame, app: &App, area: Rect) {
 
     let mut content = vec![];
 
-    // Authentication section (from CLI)
+    // Providers section - unified view of all provider options
     content.push(Line::from(vec![Span::styled(
-        "Authentication",
+        "Providers",
         theme::title_style(),
     )]));
     content.push(Line::from(""));
@@ -884,65 +884,55 @@ fn draw_settings(f: &mut Frame, app: &App, area: Rect) {
             ]));
         }
         CliStatus::Loaded(info) => {
-            for (provider, auth) in &info.auth {
-                let (icon, status_text) = if auth.authenticated {
-                    let method = if auth.method == "oauth" { "OAuth" } else { "API Key" };
+            // Show Claude Pro/Max (OAuth) as a first-class provider option
+            if let Some(auth) = info.auth.get("anthropic") {
+                let (icon, status_text) = if auth.authenticated && auth.method == "oauth" {
                     let expires = auth.expires_at.as_ref().map(|e| {
-                        // Parse and format expiry
                         format!(" (expires: {})", &e[..10])
                     }).unwrap_or_default();
-                    ("✓", format!("{}{}", method, expires))
+                    ("✓", format!("logged in{}", expires))
                 } else {
-                    ("✗", "Not configured".to_string())
+                    ("○", "[L] to login".to_string())
                 };
 
                 content.push(Line::from(vec![
-                    Span::styled(format!("  {} ", icon), if auth.authenticated {
+                    Span::styled(format!("  {} ", icon), if auth.authenticated && auth.method == "oauth" {
                         Style::default().fg(Color::Green)
                     } else {
                         theme::dim_style()
                     }),
-                    Span::styled(format!("{}: ", provider), theme::dim_style()),
-                    Span::styled(status_text, theme::normal_style()),
+                    Span::styled("Claude Pro/Max: ", theme::normal_style()),
+                    Span::styled(status_text, theme::dim_style()),
                 ]));
             }
+
+            // Show other providers with their API key status
+            for (name, provider) in &info.providers {
+                let icon = if provider.has_key { "✓" } else { "○" };
+                let status = if provider.has_key {
+                    "API key set".to_string()
+                } else {
+                    "no API key".to_string()
+                };
+
+                content.push(Line::from(vec![
+                    Span::styled(format!("  {} ", icon), if provider.has_key {
+                        Style::default().fg(Color::Green)
+                    } else {
+                        theme::dim_style()
+                    }),
+                    Span::styled(format!("{}: ", name), theme::normal_style()),
+                    Span::styled(status, theme::dim_style()),
+                ]));
+            }
+
             content.push(Line::from(""));
             content.push(Line::from(vec![
                 Span::styled("  ", theme::dim_style()),
                 Span::styled("[L]", theme::title_style()),
-                Span::styled(" Login  ", theme::dim_style()),
+                Span::styled(" Claude Login  ", theme::dim_style()),
                 Span::styled("[r]", theme::title_style()),
                 Span::styled(" Refresh", theme::dim_style()),
-            ]));
-        }
-    }
-
-    content.push(Line::from(""));
-
-    // Providers section (from CLI)
-    content.push(Line::from(vec![Span::styled(
-        "Providers",
-        theme::title_style(),
-    )]));
-    content.push(Line::from(""));
-
-    if let CliStatus::Loaded(info) = &app.cli_status {
-        for (name, provider) in &info.providers {
-            let icon = if provider.has_key { "✓" } else { "✗" };
-            let type_str = if provider.provider_type.is_empty() {
-                "unknown".to_string()
-            } else {
-                provider.provider_type.clone()
-            };
-
-            content.push(Line::from(vec![
-                Span::styled(format!("  {} ", icon), if provider.has_key {
-                    Style::default().fg(Color::Green)
-                } else {
-                    theme::dim_style()
-                }),
-                Span::styled(format!("{}: ", name), theme::dim_style()),
-                Span::styled(format!("({})", type_str), theme::normal_style()),
             ]));
         }
     }
