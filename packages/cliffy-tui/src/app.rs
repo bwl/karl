@@ -1,7 +1,9 @@
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use std::path::PathBuf;
+use std::sync::mpsc::Receiver;
 use tui_textarea::TextArea;
 
+use crate::cli::{self, CliStatus};
 use crate::data::{
     discover_hooks, discover_skills, discover_stacks, load_merged_config, save_config,
     CliffyConfig, HookInfo, ModelConfig, SkillInfo, StackConfig,
@@ -359,6 +361,13 @@ pub struct App {
     // Forms
     pub model_form: Option<ModelForm>,
     pub stack_form: Option<StackForm>,
+
+    // CLI integration (for Settings tab)
+    pub cli_status: CliStatus,
+    cli_info_receiver: Option<Receiver<CliStatus>>,
+
+    // Login flow state
+    pub needs_login_flow: bool,
 }
 
 /// Pending action that needs confirmation
@@ -373,6 +382,9 @@ pub enum PendingAction {
 impl App {
     pub fn new() -> anyhow::Result<Self> {
         let (config, config_path) = load_merged_config()?;
+
+        // Start background CLI info fetch
+        let cli_info_receiver = Some(cli::fetch_cli_info_async());
 
         let mut app = Self {
             tab: Tab::Models,
@@ -398,10 +410,34 @@ impl App {
             pending_action: None,
             model_form: None,
             stack_form: None,
+            cli_status: CliStatus::Loading,
+            cli_info_receiver,
+            needs_login_flow: false,
         };
 
         app.refresh_all();
         Ok(app)
+    }
+
+    /// Check for CLI info updates (call this in the event loop)
+    pub fn poll_cli_info(&mut self) {
+        if let Some(ref receiver) = self.cli_info_receiver {
+            if let Ok(status) = receiver.try_recv() {
+                self.cli_status = status;
+                self.cli_info_receiver = None; // Done receiving
+            }
+        }
+    }
+
+    /// Refresh CLI info
+    pub fn refresh_cli_info(&mut self) {
+        self.cli_status = CliStatus::Loading;
+        self.cli_info_receiver = Some(cli::fetch_cli_info_async());
+    }
+
+    /// Request a login flow (will be handled by main loop)
+    pub fn request_login(&mut self) {
+        self.needs_login_flow = true;
     }
 
     /// Refresh all data from config and filesystem
@@ -570,7 +606,14 @@ impl App {
             // Refresh
             KeyCode::Char('r') => {
                 self.refresh_all();
+                if self.tab == Tab::Settings {
+                    self.refresh_cli_info();
+                }
                 self.status_message = Some("Refreshed".to_string());
+            }
+            // Login (Settings tab only)
+            KeyCode::Char('L') if self.tab == Tab::Settings => {
+                self.request_login();
             }
             // Toggle (for tools)
             KeyCode::Char(' ') if self.tab == Tab::Tools => {

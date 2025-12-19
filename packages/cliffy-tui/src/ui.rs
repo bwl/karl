@@ -831,46 +831,188 @@ fn draw_hook_detail_full(f: &mut Frame, app: &App, area: Rect) {
 
 /// Draw settings tab
 fn draw_settings(f: &mut Frame, app: &App, area: Rect) {
-    let content = vec![
-        Line::from(vec![Span::styled(
-            "Volley Settings",
-            theme::title_style(),
-        )]),
-        Line::from(""),
-        Line::from(vec![
-            Span::styled("Max Concurrent: ", theme::dim_style()),
+    use crate::cli::CliStatus;
+
+    let mut content = vec![];
+
+    // Authentication section (from CLI)
+    content.push(Line::from(vec![Span::styled(
+        "Authentication",
+        theme::title_style(),
+    )]));
+    content.push(Line::from(""));
+
+    match &app.cli_status {
+        CliStatus::Loading => {
+            content.push(Line::from(vec![
+                Span::styled("  ", theme::dim_style()),
+                Span::styled("Loading...", theme::dim_style()),
+            ]));
+        }
+        CliStatus::NotAvailable => {
+            content.push(Line::from(vec![
+                Span::styled("  ✗ ", theme::dim_style()),
+                Span::styled("CLI not found. Install cliffy CLI.", theme::normal_style()),
+            ]));
+        }
+        CliStatus::Error(e) => {
+            content.push(Line::from(vec![
+                Span::styled("  ✗ ", theme::dim_style()),
+                Span::styled(format!("Error: {}", e), theme::normal_style()),
+            ]));
+        }
+        CliStatus::Loaded(info) => {
+            for (provider, auth) in &info.auth {
+                let (icon, status_text) = if auth.authenticated {
+                    let method = if auth.method == "oauth" { "OAuth" } else { "API Key" };
+                    let expires = auth.expires_at.as_ref().map(|e| {
+                        // Parse and format expiry
+                        format!(" (expires: {})", &e[..10])
+                    }).unwrap_or_default();
+                    ("✓", format!("{}{}", method, expires))
+                } else {
+                    ("✗", "Not configured".to_string())
+                };
+
+                content.push(Line::from(vec![
+                    Span::styled(format!("  {} ", icon), if auth.authenticated {
+                        Style::default().fg(Color::Green)
+                    } else {
+                        theme::dim_style()
+                    }),
+                    Span::styled(format!("{}: ", provider), theme::dim_style()),
+                    Span::styled(status_text, theme::normal_style()),
+                ]));
+            }
+            content.push(Line::from(""));
+            content.push(Line::from(vec![
+                Span::styled("  ", theme::dim_style()),
+                Span::styled("[L]", theme::title_style()),
+                Span::styled(" Login  ", theme::dim_style()),
+                Span::styled("[r]", theme::title_style()),
+                Span::styled(" Refresh", theme::dim_style()),
+            ]));
+        }
+    }
+
+    content.push(Line::from(""));
+
+    // Providers section (from CLI)
+    content.push(Line::from(vec![Span::styled(
+        "Providers",
+        theme::title_style(),
+    )]));
+    content.push(Line::from(""));
+
+    if let CliStatus::Loaded(info) = &app.cli_status {
+        for (name, provider) in &info.providers {
+            let icon = if provider.has_key { "✓" } else { "✗" };
+            let type_str = if provider.provider_type.is_empty() {
+                "unknown".to_string()
+            } else {
+                provider.provider_type.clone()
+            };
+
+            content.push(Line::from(vec![
+                Span::styled(format!("  {} ", icon), if provider.has_key {
+                    Style::default().fg(Color::Green)
+                } else {
+                    theme::dim_style()
+                }),
+                Span::styled(format!("{}: ", name), theme::dim_style()),
+                Span::styled(format!("({})", type_str), theme::normal_style()),
+            ]));
+        }
+    }
+
+    content.push(Line::from(""));
+
+    // Configuration section
+    content.push(Line::from(vec![Span::styled(
+        "Configuration",
+        theme::title_style(),
+    )]));
+    content.push(Line::from(""));
+
+    content.push(Line::from(vec![
+        Span::styled("  Default Model: ", theme::dim_style()),
+        Span::styled(&app.config.default_model, theme::normal_style()),
+    ]));
+
+    if let CliStatus::Loaded(info) = &app.cli_status {
+        let global_icon = if info.config.global_exists { "✓" } else { "✗" };
+        let project_icon = if info.config.project_exists { "✓" } else { "-" };
+
+        content.push(Line::from(vec![
+            Span::styled(format!("  {} Global: ", global_icon), theme::dim_style()),
+            Span::styled(&info.config.global_path, theme::dim_style()),
+        ]));
+        content.push(Line::from(vec![
+            Span::styled(format!("  {} Project: ", project_icon), theme::dim_style()),
             Span::styled(
-                format!("{}", app.config.volley.max_concurrent),
-                theme::normal_style(),
-            ),
-        ]),
-        Line::from(vec![
-            Span::styled("Retry Attempts: ", theme::dim_style()),
-            Span::styled(
-                format!("{}", app.config.volley.retry_attempts),
-                theme::normal_style(),
-            ),
-        ]),
-        Line::from(vec![
-            Span::styled("Retry Backoff: ", theme::dim_style()),
-            Span::styled(&app.config.volley.retry_backoff, theme::normal_style()),
-        ]),
-        Line::from(""),
-        Line::from(vec![Span::styled("General", theme::title_style())]),
-        Line::from(""),
-        Line::from(vec![
-            Span::styled("Default Model: ", theme::dim_style()),
-            Span::styled(&app.config.default_model, theme::normal_style()),
-        ]),
-        Line::from(""),
-        Line::from(vec![
-            Span::styled("Config Path: ", theme::dim_style()),
-            Span::styled(
-                app.config_path.to_string_lossy(),
+                if info.config.project_exists {
+                    info.config.project_path.as_str()
+                } else {
+                    "(none)"
+                },
                 theme::dim_style(),
             ),
-        ]),
-    ];
+        ]));
+    }
+
+    content.push(Line::from(""));
+
+    // Summary section
+    content.push(Line::from(vec![Span::styled(
+        "Summary",
+        theme::title_style(),
+    )]));
+    content.push(Line::from(""));
+
+    if let CliStatus::Loaded(info) = &app.cli_status {
+        content.push(Line::from(vec![
+            Span::styled("  Models: ", theme::dim_style()),
+            Span::styled(format!("{}", info.counts.models), theme::normal_style()),
+            Span::styled("  Stacks: ", theme::dim_style()),
+            Span::styled(format!("{}", info.counts.stacks), theme::normal_style()),
+            Span::styled("  Skills: ", theme::dim_style()),
+            Span::styled(format!("{}", info.counts.skills), theme::normal_style()),
+            Span::styled("  Hooks: ", theme::dim_style()),
+            Span::styled(format!("{}", info.counts.hooks), theme::normal_style()),
+        ]));
+        content.push(Line::from(vec![
+            Span::styled("  CLI version: ", theme::dim_style()),
+            Span::styled(&info.version, theme::normal_style()),
+        ]));
+    }
+
+    content.push(Line::from(""));
+
+    // Volley Settings
+    content.push(Line::from(vec![Span::styled(
+        "Volley Settings",
+        theme::title_style(),
+    )]));
+    content.push(Line::from(""));
+
+    content.push(Line::from(vec![
+        Span::styled("  Max Concurrent: ", theme::dim_style()),
+        Span::styled(
+            format!("{}", app.config.volley.max_concurrent),
+            theme::normal_style(),
+        ),
+    ]));
+    content.push(Line::from(vec![
+        Span::styled("  Retry Attempts: ", theme::dim_style()),
+        Span::styled(
+            format!("{}", app.config.volley.retry_attempts),
+            theme::normal_style(),
+        ),
+    ]));
+    content.push(Line::from(vec![
+        Span::styled("  Retry Backoff: ", theme::dim_style()),
+        Span::styled(&app.config.volley.retry_backoff, theme::normal_style()),
+    ]));
 
     let block = Block::default()
         .borders(Borders::ALL)

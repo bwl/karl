@@ -1,4 +1,5 @@
 mod app;
+mod cli;
 mod data;
 mod theme;
 mod ui;
@@ -51,11 +52,21 @@ fn main() -> Result<()> {
     Ok(())
 }
 
-fn run_app<B: ratatui::backend::Backend>(
+fn run_app<B: ratatui::backend::Backend + io::Write>(
     terminal: &mut Terminal<B>,
     app: &mut App,
 ) -> Result<()> {
     loop {
+        // Check for CLI info updates
+        app.poll_cli_info();
+
+        // Handle login flow request
+        if app.needs_login_flow {
+            app.needs_login_flow = false;
+            run_login_flow(terminal, app)?;
+            continue;
+        }
+
         terminal.draw(|f| ui::draw(f, app))?;
 
         // Poll for events with timeout
@@ -68,13 +79,68 @@ fn run_app<B: ratatui::backend::Backend>(
             }
         }
 
-        // Clear status message after a while
-        // (In a real app, you'd track time)
-
         if app.should_quit {
             break;
         }
     }
+
+    Ok(())
+}
+
+/// Run the login flow by suspending TUI and calling CLI
+fn run_login_flow<B: ratatui::backend::Backend + io::Write>(
+    terminal: &mut Terminal<B>,
+    app: &mut App,
+) -> Result<()> {
+    // Restore terminal to normal mode
+    disable_raw_mode()?;
+    execute!(
+        terminal.backend_mut(),
+        LeaveAlternateScreen,
+        DisableMouseCapture
+    )?;
+    terminal.show_cursor()?;
+
+    // Run the login command
+    println!("\n");
+    let success = cli::run_interactive_command(&["--login"]).unwrap_or(false);
+
+    // Show result and wait for keypress
+    if success {
+        println!("\n✓ Login successful!");
+    } else {
+        println!("\n✗ Login failed or cancelled.");
+    }
+    println!("\nPress any key to continue...");
+
+    // Wait for a keypress
+    enable_raw_mode()?;
+    loop {
+        if event::poll(Duration::from_millis(100))? {
+            if let Event::Key(_) = event::read()? {
+                break;
+            }
+        }
+    }
+    disable_raw_mode()?;
+
+    // Re-enter TUI mode
+    execute!(
+        terminal.backend_mut(),
+        EnterAlternateScreen,
+        EnableMouseCapture
+    )?;
+    enable_raw_mode()?;
+    terminal.hide_cursor()?;
+    terminal.clear()?;
+
+    // Refresh CLI info after login
+    app.refresh_cli_info();
+    app.status_message = Some(if success {
+        "Login successful".to_string()
+    } else {
+        "Login cancelled".to_string()
+    });
 
     Ok(())
 }

@@ -52,8 +52,9 @@ Skills Commands:
   cliffy skills create <name>     Create a new skill template
   cliffy skills validate <path>   Validate a skill
 
-Setup:
+Setup & Info:
   cliffy setup                    Open the config TUI
+  cliffy info                     Show system info (add --json for JSON output)
 
 Examples:
   cliffy "fix the bug in parser.go"
@@ -227,6 +228,13 @@ async function main() {
   if (args[0] === 'stacks') {
     const { handleStacksCommand } = await import('./commands/stacks.js');
     await handleStacksCommand(args.slice(1));
+    return;
+  }
+
+  // Handle info command - outputs system info as JSON for TUI
+  if (args[0] === 'info') {
+    const { handleInfoCommand } = await import('./commands/info.js');
+    await handleInfoCommand(args.slice(1));
     return;
   }
 
