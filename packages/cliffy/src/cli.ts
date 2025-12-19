@@ -21,7 +21,7 @@ Flags:
   --smart, -s          Use the smart model
   --model, -m          Exact model id or alias
   --tui                 Enable live TUI (default: off)
-  --verbose, -v        Print tool traces and timing
+  --verbose, -v        Stream thoughts and tool calls as a log
   --json, -j           JSON output
   --stats              Print summary stats
   --max-concurrent     Max parallel tasks (default: 3)
@@ -264,7 +264,8 @@ async function main() {
   const state = initState(finalTasks);
   const useTui = options.tui ?? false;
   const tui = await createTuiRenderer(useTui);
-  const spinner = new Spinner(!useTui && !options.json);
+  const useVerbose = options.verbose && !useTui && !options.json;
+  const spinner = new Spinner(!useTui && !options.json, useVerbose);
   
   if (useTui) {
     tui.update(state);
