@@ -52,6 +52,7 @@ export interface ProviderConfig {
   type: string;
   baseUrl?: string;
   apiKey?: string;
+  authType?: 'api_key' | 'oauth';
   [key: string]: unknown;
 }
 

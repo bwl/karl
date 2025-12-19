@@ -46,6 +46,7 @@ pub struct ProviderConfig {
     pub provider_type: String,
     pub base_url: Option<String>,
     pub api_key: Option<String>,
+    pub auth_type: Option<String>,
     // Extra fields that might exist in user configs - ignore them
     #[serde(flatten)]
     pub extra: std::collections::HashMap<String, serde_json::Value>,

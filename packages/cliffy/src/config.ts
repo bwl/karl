@@ -15,6 +15,10 @@ const DEFAULT_CONFIG: CliffyConfig = {
     }
   },
   providers: {
+    'claude-pro-max': {
+      type: 'anthropic',
+      authType: 'oauth'
+    },
     openrouter: {
       type: 'openai',
       baseUrl: 'https://openrouter.ai/api/v1',

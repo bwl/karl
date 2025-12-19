@@ -69,26 +69,40 @@ export async function getInfo(cwd: string): Promise<InfoOutput> {
   const config = await loadConfig(cwd);
   const version = await loadVersion();
 
-  // Check auth status
-  const anthropicCreds = loadOAuthCredentials('anthropic');
+  // Check auth status for all providers
   const authStatus: InfoOutput['auth'] = {};
 
-  if (anthropicCreds) {
-    authStatus['anthropic'] = {
-      authenticated: true,
-      method: 'oauth',
-      expires_at: new Date(anthropicCreds.expires).toISOString()
-    };
-  } else if (checkApiKeyPresent(config.providers?.anthropic?.apiKey)) {
-    authStatus['anthropic'] = {
-      authenticated: true,
-      method: 'api_key'
-    };
-  } else {
-    authStatus['anthropic'] = {
-      authenticated: false,
-      method: 'none'
-    };
+  for (const [name, providerConfig] of Object.entries(config.providers ?? {})) {
+    if (providerConfig.authType === 'oauth') {
+      // OAuth-based provider - check oauth.json for credentials
+      const oauthStorageKey = name === 'claude-pro-max' ? 'anthropic' : name;
+      const oauthCreds = loadOAuthCredentials(oauthStorageKey);
+      if (oauthCreds) {
+        authStatus[name] = {
+          authenticated: true,
+          method: 'oauth',
+          expires_at: new Date(oauthCreds.expires).toISOString()
+        };
+      } else {
+        authStatus[name] = {
+          authenticated: false,
+          method: 'none'
+        };
+      }
+    } else {
+      // API key based provider
+      if (checkApiKeyPresent(providerConfig.apiKey)) {
+        authStatus[name] = {
+          authenticated: true,
+          method: 'api_key'
+        };
+      } else {
+        authStatus[name] = {
+          authenticated: false,
+          method: 'none'
+        };
+      }
+    }
   }
 
   // Provider status

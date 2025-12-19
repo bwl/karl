@@ -10,7 +10,7 @@ import { runTask } from './runner.js';
 import { printResults } from './print.js';
 import { CliOptions } from './types.js';
 import { formatError, parseDurationMs, readTextIfExists } from './utils.js';
-import { getAnthropicAccessToken, runLoginFlow } from './oauth.js';
+import { getProviderOAuthToken, runLoginFlow } from './oauth.js';
 import { Spinner } from './spinner.js';
 import { loadStack } from './stacks.js';
 
@@ -290,23 +290,24 @@ async function main() {
   }
 
   const resolvedModel = resolveModel(config, effectiveOptions);
-  
-  // Try to get API key: env var first, then OAuth
-  let apiKey = resolvedModel.providerConfig.apiKey;
-  
-  // Check if API key is missing or unexpanded (still contains ${...})
-  const apiKeyMissing = !apiKey || apiKey.includes('${');
-  
-  if (apiKeyMissing && resolvedModel.providerKey === 'anthropic') {
-    apiKey = await getAnthropicAccessToken();
+
+  // Resolve credentials based on provider's authType
+  let apiKey: string | null | undefined;
+
+  if (resolvedModel.providerConfig.authType === 'oauth') {
+    // OAuth-based provider - fetch token automatically
+    apiKey = await getProviderOAuthToken(resolvedModel.providerKey);
+  } else {
+    // API key based provider (default)
+    apiKey = resolvedModel.providerConfig.apiKey;
   }
-  
+
+  // Check if credentials are missing or unexpanded
   if (!apiKey || apiKey.includes('${')) {
-    console.error(`No API key found for provider: ${resolvedModel.providerKey}`);
+    console.error(`No credentials found for provider: ${resolvedModel.providerKey}`);
     console.error('');
-    if (resolvedModel.providerKey === 'anthropic') {
-      console.error('Run `cliffy --login` to authenticate with Claude Pro/Max,');
-      console.error('or set ANTHROPIC_API_KEY environment variable.');
+    if (resolvedModel.providerConfig.authType === 'oauth') {
+      console.error('Run `cliffy --login` to authenticate.');
     } else {
       console.error(`Set the appropriate API key environment variable.`);
     }

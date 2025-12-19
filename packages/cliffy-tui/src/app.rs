@@ -217,74 +217,77 @@ impl ToolForm {
     }
 }
 
-/// Main tabs
+/// Sections on the page (replaces tabs)
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Tab {
+pub enum Section {
+    Settings,
     Models,
     Stacks,
     Skills,
     Tools,
     Hooks,
-    Settings,
 }
 
-impl Tab {
-    pub fn all() -> &'static [Tab] {
+impl Section {
+    pub fn all() -> &'static [Section] {
         &[
-            Tab::Models,
-            Tab::Stacks,
-            Tab::Skills,
-            Tab::Tools,
-            Tab::Hooks,
-            Tab::Settings,
+            Section::Settings,
+            Section::Models,
+            Section::Stacks,
+            Section::Skills,
+            Section::Tools,
+            Section::Hooks,
         ]
     }
 
     pub fn name(&self) -> &'static str {
         match self {
-            Tab::Models => "Models",
-            Tab::Stacks => "Stacks",
-            Tab::Skills => "Skills",
-            Tab::Tools => "Tools",
-            Tab::Hooks => "Hooks",
-            Tab::Settings => "Settings",
+            Section::Settings => "Settings",
+            Section::Models => "Models",
+            Section::Stacks => "Stacks",
+            Section::Skills => "Skills",
+            Section::Tools => "Tools",
+            Section::Hooks => "Hooks",
         }
     }
 
     pub fn next(self) -> Self {
         match self {
-            Tab::Models => Tab::Stacks,
-            Tab::Stacks => Tab::Skills,
-            Tab::Skills => Tab::Tools,
-            Tab::Tools => Tab::Hooks,
-            Tab::Hooks => Tab::Settings,
-            Tab::Settings => Tab::Models,
+            Section::Settings => Section::Models,
+            Section::Models => Section::Stacks,
+            Section::Stacks => Section::Skills,
+            Section::Skills => Section::Tools,
+            Section::Tools => Section::Hooks,
+            Section::Hooks => Section::Settings,
         }
     }
 
     pub fn prev(self) -> Self {
         match self {
-            Tab::Models => Tab::Settings,
-            Tab::Stacks => Tab::Models,
-            Tab::Skills => Tab::Stacks,
-            Tab::Tools => Tab::Skills,
-            Tab::Hooks => Tab::Tools,
-            Tab::Settings => Tab::Hooks,
+            Section::Settings => Section::Hooks,
+            Section::Models => Section::Settings,
+            Section::Stacks => Section::Models,
+            Section::Skills => Section::Stacks,
+            Section::Tools => Section::Skills,
+            Section::Hooks => Section::Tools,
         }
     }
 
     pub fn from_number(n: u8) -> Option<Self> {
         match n {
-            1 => Some(Tab::Models),
-            2 => Some(Tab::Stacks),
-            3 => Some(Tab::Skills),
-            4 => Some(Tab::Tools),
-            5 => Some(Tab::Hooks),
-            6 => Some(Tab::Settings),
+            1 => Some(Section::Settings),
+            2 => Some(Section::Models),
+            3 => Some(Section::Stacks),
+            4 => Some(Section::Skills),
+            5 => Some(Section::Tools),
+            6 => Some(Section::Hooks),
             _ => None,
         }
     }
 }
+
+// Keep Tab as alias for backwards compatibility with view logic
+pub type Tab = Section;
 
 /// View mode within a tab
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -329,35 +332,39 @@ pub struct ToolItem {
 
 /// Application state
 pub struct App {
-    pub tab: Tab,
+    pub section: Section,
+    pub tab: Tab, // Alias for section (backwards compat)
     pub view: View,
     pub input_mode: InputMode,
     pub should_quit: bool,
     pub status_message: Option<String>,
+
+    // Scroll position for the page
+    pub scroll_offset: u16,
 
     // Config
     pub config: CliffyConfig,
     pub config_path: PathBuf,
     pub dirty: bool,
 
-    // Models tab state
+    // Models section state
     pub models: FilteredList<ModelItem>,
     pub model_search: TextInput,
 
-    // Stacks tab state
+    // Stacks section state
     pub stacks: FilteredList<StackItem>,
     pub stack_search: TextInput,
 
-    // Skills tab state
+    // Skills section state
     pub skills: FilteredList<SkillInfo>,
     pub skill_search: TextInput,
 
-    // Tools tab state
+    // Tools section state
     pub tools: FilteredList<ToolItem>,
     pub tool_search: TextInput,
     pub tool_form: Option<ToolForm>,
 
-    // Hooks tab state
+    // Hooks section state
     pub hooks: FilteredList<HookInfo>,
     pub hook_search: TextInput,
 
@@ -369,7 +376,7 @@ pub struct App {
     pub model_form: Option<ModelForm>,
     pub stack_form: Option<StackForm>,
 
-    // CLI integration (for Settings tab)
+    // CLI integration (for Settings section)
     pub cli_status: CliStatus,
     cli_info_receiver: Option<Receiver<CliStatus>>,
 
@@ -394,11 +401,13 @@ impl App {
         let cli_info_receiver = Some(cli::fetch_cli_info_async());
 
         let mut app = Self {
-            tab: Tab::Models,
+            section: Section::Settings,
+            tab: Section::Settings, // Alias
             view: View::List,
             input_mode: InputMode::Normal,
             should_quit: false,
             status_message: None,
+            scroll_offset: 0,
             config,
             config_path,
             dirty: false,
@@ -568,21 +577,24 @@ impl App {
             _ => {}
         }
 
-        // Tab navigation
+        // Section navigation (Tab/Shift-Tab to switch sections)
         match key.code {
             KeyCode::Tab => {
-                self.tab = self.tab.next();
+                self.section = self.section.next();
+                self.tab = self.section; // Keep in sync
                 self.view = View::List;
                 return;
             }
             KeyCode::BackTab => {
-                self.tab = self.tab.prev();
+                self.section = self.section.prev();
+                self.tab = self.section; // Keep in sync
                 self.view = View::List;
                 return;
             }
             KeyCode::Char(c) if c.is_ascii_digit() => {
-                if let Some(tab) = Tab::from_number(c as u8 - b'0') {
-                    self.tab = tab;
+                if let Some(section) = Section::from_number(c as u8 - b'0') {
+                    self.section = section;
+                    self.tab = section; // Keep in sync
                     self.view = View::List;
                 }
                 return;
@@ -613,17 +625,15 @@ impl App {
             // Refresh
             KeyCode::Char('r') => {
                 self.refresh_all();
-                if self.tab == Tab::Settings {
-                    self.refresh_cli_info();
-                }
+                self.refresh_cli_info();
                 self.status_message = Some("Refreshed".to_string());
             }
-            // Login (Settings tab only)
-            KeyCode::Char('L') if self.tab == Tab::Settings => {
+            // Login (Settings section)
+            KeyCode::Char('L') if self.section == Section::Settings => {
                 self.request_login();
             }
             // Toggle (for tools)
-            KeyCode::Char(' ') if self.tab == Tab::Tools => {
+            KeyCode::Char(' ') if self.section == Section::Tools => {
                 self.toggle_selected_tool();
             }
             // Create new
@@ -664,13 +674,13 @@ impl App {
                 self.input_mode = InputMode::Normal;
             }
             _ => {
-                let search_input = match self.tab {
-                    Tab::Models => &mut self.model_search,
-                    Tab::Stacks => &mut self.stack_search,
-                    Tab::Skills => &mut self.skill_search,
-                    Tab::Tools => &mut self.tool_search,
-                    Tab::Hooks => &mut self.hook_search,
-                    _ => return,
+                let search_input = match self.section {
+                    Section::Models => &mut self.model_search,
+                    Section::Stacks => &mut self.stack_search,
+                    Section::Skills => &mut self.skill_search,
+                    Section::Tools => &mut self.tool_search,
+                    Section::Hooks => &mut self.hook_search,
+                    Section::Settings => return,
                 };
                 if search_input.handle_key(key) {
                     self.apply_search();
@@ -706,83 +716,83 @@ impl App {
     }
 
     fn move_down(&mut self) {
-        match self.tab {
-            Tab::Models => self.models.next(),
-            Tab::Stacks => self.stacks.next(),
-            Tab::Skills => self.skills.next(),
-            Tab::Tools => self.tools.next(),
-            Tab::Hooks => self.hooks.next(),
-            Tab::Settings => {}
+        match self.section {
+            Section::Models => self.models.next(),
+            Section::Stacks => self.stacks.next(),
+            Section::Skills => self.skills.next(),
+            Section::Tools => self.tools.next(),
+            Section::Hooks => self.hooks.next(),
+            Section::Settings => {}
         }
     }
 
     fn move_up(&mut self) {
-        match self.tab {
-            Tab::Models => self.models.previous(),
-            Tab::Stacks => self.stacks.previous(),
-            Tab::Skills => self.skills.previous(),
-            Tab::Tools => self.tools.previous(),
-            Tab::Hooks => self.hooks.previous(),
-            Tab::Settings => {}
+        match self.section {
+            Section::Models => self.models.previous(),
+            Section::Stacks => self.stacks.previous(),
+            Section::Skills => self.skills.previous(),
+            Section::Tools => self.tools.previous(),
+            Section::Hooks => self.hooks.previous(),
+            Section::Settings => {}
         }
     }
 
     fn apply_search(&mut self) {
-        match self.tab {
-            Tab::Models => {
+        match self.section {
+            Section::Models => {
                 let query = self.model_search.value.to_lowercase();
                 self.models
                     .apply_filter(|item| item.alias.to_lowercase().contains(&query));
             }
-            Tab::Stacks => {
+            Section::Stacks => {
                 let query = self.stack_search.value.to_lowercase();
                 self.stacks
                     .apply_filter(|item| item.name.to_lowercase().contains(&query));
             }
-            Tab::Skills => {
+            Section::Skills => {
                 let query = self.skill_search.value.to_lowercase();
                 self.skills.apply_filter(|item| {
                     item.name.to_lowercase().contains(&query)
                         || item.description.to_lowercase().contains(&query)
                 });
             }
-            Tab::Tools => {
+            Section::Tools => {
                 let query = self.tool_search.value.to_lowercase();
                 self.tools
                     .apply_filter(|item| item.name.to_lowercase().contains(&query));
             }
-            Tab::Hooks => {
+            Section::Hooks => {
                 let query = self.hook_search.value.to_lowercase();
                 self.hooks
                     .apply_filter(|item| item.name.to_lowercase().contains(&query));
             }
-            _ => {}
+            Section::Settings => {}
         }
     }
 
     fn clear_search(&mut self) {
-        match self.tab {
-            Tab::Models => {
+        match self.section {
+            Section::Models => {
                 self.model_search.clear();
                 self.models.clear_filter();
             }
-            Tab::Stacks => {
+            Section::Stacks => {
                 self.stack_search.clear();
                 self.stacks.clear_filter();
             }
-            Tab::Skills => {
+            Section::Skills => {
                 self.skill_search.clear();
                 self.skills.clear_filter();
             }
-            Tab::Tools => {
+            Section::Tools => {
                 self.tool_search.clear();
                 self.tools.clear_filter();
             }
-            Tab::Hooks => {
+            Section::Hooks => {
                 self.hook_search.clear();
                 self.hooks.clear_filter();
             }
-            _ => {}
+            Section::Settings => {}
         }
     }
 
@@ -807,8 +817,8 @@ impl App {
     }
 
     fn confirm_delete(&mut self) {
-        match self.tab {
-            Tab::Models => {
+        match self.section {
+            Section::Models => {
                 if let Some(model) = self.models.selected() {
                     self.confirm_dialog = Some(ConfirmDialog::new(
                         "Delete Model",
@@ -817,7 +827,7 @@ impl App {
                     self.pending_action = Some(PendingAction::DeleteModel(model.alias.clone()));
                 }
             }
-            Tab::Stacks => {
+            Section::Stacks => {
                 if let Some(stack) = self.stacks.selected() {
                     self.confirm_dialog = Some(ConfirmDialog::new(
                         "Delete Stack",
@@ -826,7 +836,7 @@ impl App {
                     self.pending_action = Some(PendingAction::DeleteStack(stack.name.clone()));
                 }
             }
-            Tab::Tools => {
+            Section::Tools => {
                 if let Some(tool) = self.tools.selected() {
                     if !tool.is_builtin {
                         self.confirm_dialog = Some(ConfirmDialog::new(
@@ -887,31 +897,30 @@ impl App {
     }
 
     fn start_create(&mut self) {
-        match self.tab {
-            Tab::Models => {
+        match self.section {
+            Section::Models => {
                 let providers = self.get_provider_names();
                 self.model_form = Some(ModelForm::new_create(providers));
                 self.view = View::Create;
                 self.input_mode = InputMode::Editing;
             }
-            Tab::Stacks => {
+            Section::Stacks => {
                 self.stack_form = Some(StackForm::new_create());
                 self.view = View::Create;
                 self.input_mode = InputMode::Editing;
             }
-            Tab::Tools => {
+            Section::Tools => {
                 self.tool_form = Some(ToolForm::new());
                 self.view = View::Create;
                 self.input_mode = InputMode::Editing;
             }
-            // TODO: Add other tabs
             _ => {}
         }
     }
 
     fn start_edit(&mut self) {
-        match self.tab {
-            Tab::Models => {
+        match self.section {
+            Section::Models => {
                 if let Some(model) = self.models.selected() {
                     let is_default = self.config.default_model == model.alias;
                     let providers = self.get_provider_names();
@@ -920,14 +929,13 @@ impl App {
                     self.input_mode = InputMode::Editing;
                 }
             }
-            Tab::Stacks => {
+            Section::Stacks => {
                 if let Some(stack) = self.stacks.selected() {
                     self.stack_form = Some(StackForm::new_edit(&stack.name, &stack.config));
                     self.view = View::Edit;
                     self.input_mode = InputMode::Editing;
                 }
             }
-            // TODO: Add other tabs
             _ => {}
         }
     }

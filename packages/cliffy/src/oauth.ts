@@ -209,6 +209,24 @@ export async function getAnthropicAccessToken(): Promise<string | null> {
 }
 
 /**
+ * Get OAuth token for any OAuth-based provider
+ */
+export async function getProviderOAuthToken(provider: string): Promise<string | null> {
+  // Map provider keys to their OAuth storage key
+  const oauthProviderMap: Record<string, string> = {
+    'claude-pro-max': 'anthropic'
+  };
+
+  const oauthProvider = oauthProviderMap[provider] || provider;
+
+  if (oauthProvider === 'anthropic') {
+    return getAnthropicAccessToken();
+  }
+
+  return null;
+}
+
+/**
  * Interactive login flow for CLI
  */
 export async function runLoginFlow(): Promise<void> {

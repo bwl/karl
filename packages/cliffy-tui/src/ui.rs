@@ -2,28 +2,27 @@ use ratatui::{
     layout::{Alignment, Constraint, Direction, Layout, Rect},
     style::{Color, Modifier, Style},
     text::{Line, Span},
-    widgets::{Block, Borders, Clear, List, ListItem, Paragraph, Tabs},
+    widgets::{Block, Borders, Clear, List, ListItem, Paragraph},
     Frame,
 };
 
-use crate::app::{App, FormMode, InputMode, Tab, View};
+use crate::app::{App, FormMode, InputMode, Section, View};
 use crate::theme;
 use crate::widgets::{FormFieldWidget, ToggleFieldWidget};
 
 /// Main draw function
 pub fn draw(f: &mut Frame, app: &mut App) {
-    let chunks = Layout::default()
-        .direction(Direction::Vertical)
-        .constraints([
-            Constraint::Length(3), // Tab bar
-            Constraint::Min(0),    // Content
-            Constraint::Length(2), // Status bar
-        ])
-        .split(f.area());
-
-    draw_tabs(f, app, chunks[0]);
-    draw_content(f, app, chunks[1]);
-    draw_status_bar(f, app, chunks[2]);
+    // Check if we're in a form view - take over the whole screen
+    if app.view == View::Edit || app.view == View::Create {
+        match app.section {
+            Section::Models => draw_model_form(f, app, f.area()),
+            Section::Stacks => draw_stack_form(f, app, f.area()),
+            Section::Tools => draw_tool_form(f, app, f.area()),
+            _ => draw_stacked_page(f, app),
+        }
+    } else {
+        draw_stacked_page(f, app);
+    }
 
     // Draw confirm dialog overlay if active
     if app.confirm_dialog.is_some() {
@@ -31,153 +30,349 @@ pub fn draw(f: &mut Frame, app: &mut App) {
     }
 }
 
-/// Draw tab bar
-fn draw_tabs(f: &mut Frame, app: &App, area: Rect) {
-    let titles: Vec<Line> = Tab::all()
-        .iter()
-        .enumerate()
-        .map(|(i, tab)| {
-            let style = theme::tab_style(*tab == app.tab);
-            Line::from(vec![
-                Span::styled(format!("{}", i + 1), theme::dim_style()),
-                Span::raw(" "),
-                Span::styled(tab.name(), style),
-            ])
-        })
-        .collect();
+/// Draw the main stacked page layout
+fn draw_stacked_page(f: &mut Frame, app: &mut App) {
+    let chunks = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([
+            Constraint::Length(1), // Title bar
+            Constraint::Min(0),    // Content
+            Constraint::Length(2), // Status bar
+        ])
+        .split(f.area());
 
-    let tabs = Tabs::new(titles)
-        .block(
-            Block::default()
-                .borders(Borders::BOTTOM)
-                .border_style(theme::border_style(false))
-                .title(" cliffy config "),
-        )
-        .select(Tab::all().iter().position(|&t| t == app.tab).unwrap_or(0))
-        .style(theme::normal_style())
-        .highlight_style(theme::title_style())
-        .divider(" │ ");
-
-    f.render_widget(tabs, area);
+    draw_title_bar(f, app, chunks[0]);
+    draw_content(f, app, chunks[1]);
+    draw_status_bar(f, app, chunks[2]);
 }
 
-/// Draw main content area
+/// Draw title bar
+fn draw_title_bar(f: &mut Frame, _app: &App, area: Rect) {
+    let title = Paragraph::new(Line::from(vec![
+        Span::styled(" cliffy ", theme::title_style()),
+        Span::styled("config", theme::dim_style()),
+    ]));
+    f.render_widget(title, area);
+}
+
+/// Draw main content - all sections stacked
 fn draw_content(f: &mut Frame, app: &mut App, area: Rect) {
-    match app.tab {
-        Tab::Models => draw_models(f, app, area),
-        Tab::Stacks => draw_stacks(f, app, area),
-        Tab::Skills => draw_skills(f, app, area),
-        Tab::Tools => draw_tools(f, app, area),
-        Tab::Hooks => draw_hooks(f, app, area),
-        Tab::Settings => draw_settings(f, app, area),
-    }
+    // Calculate heights for each section
+    // Settings gets fixed height, others split remaining space
+    let settings_height = 12u16;
+    let remaining = area.height.saturating_sub(settings_height);
+    let section_height = remaining / 5; // 5 list sections
+
+    let chunks = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([
+            Constraint::Length(settings_height),  // Settings
+            Constraint::Length(section_height),   // Models
+            Constraint::Length(section_height),   // Stacks
+            Constraint::Length(section_height),   // Skills
+            Constraint::Length(section_height),   // Tools
+            Constraint::Min(section_height),      // Hooks (takes remaining)
+        ])
+        .split(area);
+
+    draw_settings_section(f, app, chunks[0]);
+    draw_models_section(f, app, chunks[1]);
+    draw_stacks_section(f, app, chunks[2]);
+    draw_skills_section(f, app, chunks[3]);
+    draw_tools_section(f, app, chunks[4]);
+    draw_hooks_section(f, app, chunks[5]);
 }
 
-/// Draw models tab
-fn draw_models(f: &mut Frame, app: &mut App, area: Rect) {
-    match app.view {
-        View::List => {
-            let chunks = Layout::default()
-                .direction(Direction::Horizontal)
-                .constraints([Constraint::Percentage(40), Constraint::Percentage(60)])
-                .split(area);
+/// Draw settings section
+fn draw_settings_section(f: &mut Frame, app: &App, area: Rect) {
+    use crate::cli::CliStatus;
 
-            draw_models_list(f, app, chunks[0]);
-            draw_model_detail(f, app, chunks[1]);
+    let is_focused = app.section == Section::Settings;
+    let mut lines: Vec<Line> = vec![];
+
+    // Providers info
+    match &app.cli_status {
+        CliStatus::Loading => {
+            lines.push(Line::from(Span::styled("  Loading...", theme::dim_style())));
         }
-        View::Detail => draw_model_detail_full(f, app, area),
-        View::Edit | View::Create => draw_model_form(f, app, area),
-        _ => {}
+        CliStatus::NotAvailable => {
+            lines.push(Line::from(Span::styled("  CLI not found", theme::dim_style())));
+        }
+        CliStatus::Error(e) => {
+            lines.push(Line::from(Span::styled(format!("  Error: {}", e), theme::dim_style())));
+        }
+        CliStatus::Loaded(info) => {
+            // Claude Pro/Max status
+            if let Some(auth) = info.auth.get("anthropic") {
+                let (icon, status) = if auth.authenticated && auth.method == "oauth" {
+                    ("✓", "logged in")
+                } else {
+                    ("○", "not logged in [L]")
+                };
+                lines.push(Line::from(vec![
+                    Span::styled(format!("  {} ", icon), if auth.authenticated && auth.method == "oauth" {
+                        Style::default().fg(Color::Green)
+                    } else {
+                        theme::dim_style()
+                    }),
+                    Span::styled("Claude: ", theme::normal_style()),
+                    Span::styled(status, theme::dim_style()),
+                ]));
+            }
+
+            // Other providers
+            for (name, provider) in &info.providers {
+                let icon = if provider.has_key { "✓" } else { "○" };
+                let status = if provider.has_key { "API key set" } else { "no key" };
+                lines.push(Line::from(vec![
+                    Span::styled(format!("  {} ", icon), if provider.has_key {
+                        Style::default().fg(Color::Green)
+                    } else {
+                        theme::dim_style()
+                    }),
+                    Span::styled(format!("{}: ", name), theme::normal_style()),
+                    Span::styled(status, theme::dim_style()),
+                ]));
+            }
+
+            lines.push(Line::from(""));
+
+            // Config info
+            lines.push(Line::from(vec![
+                Span::styled("  Default model: ", theme::dim_style()),
+                Span::styled(&app.config.default_model, theme::normal_style()),
+            ]));
+
+            // Summary line
+            lines.push(Line::from(vec![
+                Span::styled(format!(
+                    "  {} models  {} stacks  {} skills  {} hooks",
+                    info.counts.models,
+                    info.counts.stacks,
+                    info.counts.skills,
+                    info.counts.hooks,
+                ), theme::dim_style()),
+            ]));
+        }
     }
+
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .border_style(theme::border_style(is_focused))
+        .title(section_title("1 Settings", is_focused));
+
+    let paragraph = Paragraph::new(lines).block(block);
+    f.render_widget(paragraph, area);
 }
 
-fn draw_models_list(f: &mut Frame, app: &mut App, area: Rect) {
-    // Collect data first to avoid borrow issues
+/// Draw models section
+fn draw_models_section(f: &mut Frame, app: &mut App, area: Rect) {
+    let is_focused = app.section == Section::Models;
     let default_model = app.config.default_model.clone();
+
+    // Collect data first to avoid borrow issues
     let model_data: Vec<_> = app
         .models
         .filtered_items()
         .map(|model| (model.alias.clone(), model.config.provider.clone()))
         .collect();
     let count = app.models.len();
-    let total = app.models.total_len();
 
     let items: Vec<ListItem> = model_data
         .iter()
         .map(|(alias, provider)| {
             let is_default = *alias == default_model;
-            let marker = if is_default { "◍ " } else { "  " };
+            let marker = if is_default { "◍" } else { " " };
             ListItem::new(Line::from(vec![
                 Span::styled(marker, theme::success_style()),
+                Span::raw(" "),
                 Span::styled(alias.as_str(), theme::normal_style()),
                 Span::styled(format!("  {}", provider), theme::dim_style()),
             ]))
         })
         .collect();
 
-    let title = format!(" Models ({}/{}) ", count, total);
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .border_style(theme::border_style(is_focused))
+        .title(section_title(&format!("2 Models ({})", count), is_focused));
 
     let list = List::new(items)
-        .block(
-            Block::default()
-                .borders(Borders::ALL)
-                .border_style(theme::border_style(true))
-                .title(title),
-        )
+        .block(block)
         .highlight_style(theme::selected_style())
         .highlight_symbol("▶ ");
 
     f.render_stateful_widget(list, area, &mut app.models.list_state);
 
-    // Draw search input if searching
-    if app.input_mode == InputMode::Search && app.tab == Tab::Models {
+    if app.input_mode == InputMode::Search && app.section == Section::Models {
         draw_search_input(f, &app.model_search.value, area);
     }
 }
 
-fn draw_model_detail(f: &mut Frame, app: &App, area: Rect) {
-    let content = if let Some(model) = app.models.selected() {
-        vec![
-            Line::from(vec![
-                Span::styled("Alias: ", theme::dim_style()),
-                Span::styled(&model.alias, theme::normal_style()),
-            ]),
-            Line::from(vec![
-                Span::styled("Provider: ", theme::dim_style()),
-                Span::styled(&model.config.provider, theme::normal_style()),
-            ]),
-            Line::from(vec![
-                Span::styled("Model: ", theme::dim_style()),
-                Span::styled(&model.config.model, theme::normal_style()),
-            ]),
-            Line::from(""),
-            Line::from(vec![Span::styled(
-                if model.alias == app.config.default_model {
-                    "✓ Default model"
-                } else {
-                    ""
-                },
-                theme::success_style(),
-            )]),
-        ]
-    } else {
-        vec![Line::from(Span::styled(
-            "No model selected",
-            theme::dim_style(),
-        ))]
-    };
+/// Draw stacks section
+fn draw_stacks_section(f: &mut Frame, app: &mut App, area: Rect) {
+    let is_focused = app.section == Section::Stacks;
+
+    // Collect data first to avoid borrow issues
+    let stack_data: Vec<_> = app
+        .stacks
+        .filtered_items()
+        .map(|stack| (stack.name.clone(), stack.source.clone()))
+        .collect();
+    let count = app.stacks.len();
+
+    let items: Vec<ListItem> = stack_data
+        .iter()
+        .map(|(name, source)| {
+            let source_hint = if source == "inline" { " [i]" } else { "" };
+            ListItem::new(Line::from(vec![
+                Span::styled(name.as_str(), theme::normal_style()),
+                Span::styled(source_hint, theme::dim_style()),
+            ]))
+        })
+        .collect();
 
     let block = Block::default()
         .borders(Borders::ALL)
-        .border_style(theme::border_style(false))
-        .title(" Details ");
+        .border_style(theme::border_style(is_focused))
+        .title(section_title(&format!("3 Stacks ({})", count), is_focused));
 
-    let paragraph = Paragraph::new(content).block(block);
-    f.render_widget(paragraph, area);
+    let list = List::new(items)
+        .block(block)
+        .highlight_style(theme::selected_style())
+        .highlight_symbol("▶ ");
+
+    f.render_stateful_widget(list, area, &mut app.stacks.list_state);
+
+    if app.input_mode == InputMode::Search && app.section == Section::Stacks {
+        draw_search_input(f, &app.stack_search.value, area);
+    }
 }
 
-fn draw_model_detail_full(f: &mut Frame, app: &App, area: Rect) {
-    draw_model_detail(f, app, area);
+/// Draw skills section
+fn draw_skills_section(f: &mut Frame, app: &mut App, area: Rect) {
+    let is_focused = app.section == Section::Skills;
+
+    // Collect data first to avoid borrow issues
+    let skill_names: Vec<_> = app
+        .skills
+        .filtered_items()
+        .map(|skill| skill.name.clone())
+        .collect();
+    let count = app.skills.len();
+
+    let items: Vec<ListItem> = skill_names
+        .iter()
+        .map(|name| {
+            ListItem::new(Line::from(vec![
+                Span::styled(name.as_str(), theme::normal_style()),
+            ]))
+        })
+        .collect();
+
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .border_style(theme::border_style(is_focused))
+        .title(section_title(&format!("4 Skills ({})", count), is_focused));
+
+    let list = List::new(items)
+        .block(block)
+        .highlight_style(theme::selected_style())
+        .highlight_symbol("▶ ");
+
+    f.render_stateful_widget(list, area, &mut app.skills.list_state);
+
+    if app.input_mode == InputMode::Search && app.section == Section::Skills {
+        draw_search_input(f, &app.skill_search.value, area);
+    }
+}
+
+/// Draw tools section
+fn draw_tools_section(f: &mut Frame, app: &mut App, area: Rect) {
+    let is_focused = app.section == Section::Tools;
+
+    // Collect data first to avoid borrow issues
+    let tool_data: Vec<_> = app
+        .tools
+        .filtered_items()
+        .map(|tool| (tool.name.clone(), tool.enabled, tool.is_builtin))
+        .collect();
+    let count = app.tools.len();
+
+    let items: Vec<ListItem> = tool_data
+        .iter()
+        .map(|(name, enabled, is_builtin)| {
+            let status = if *enabled { "✓" } else { " " };
+            let status_style = if *enabled { theme::success_style() } else { theme::dim_style() };
+            let type_hint = if *is_builtin { "" } else { " (custom)" };
+            ListItem::new(Line::from(vec![
+                Span::styled(format!("[{}] ", status), status_style),
+                Span::styled(name.as_str(), theme::normal_style()),
+                Span::styled(type_hint, theme::dim_style()),
+            ]))
+        })
+        .collect();
+
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .border_style(theme::border_style(is_focused))
+        .title(section_title(&format!("5 Tools ({})", count), is_focused));
+
+    let list = List::new(items)
+        .block(block)
+        .highlight_style(theme::selected_style())
+        .highlight_symbol("▶ ");
+
+    f.render_stateful_widget(list, area, &mut app.tools.list_state);
+}
+
+/// Draw hooks section
+fn draw_hooks_section(f: &mut Frame, app: &mut App, area: Rect) {
+    let is_focused = app.section == Section::Hooks;
+
+    // Collect data first to avoid borrow issues
+    let hook_data: Vec<_> = app
+        .hooks
+        .filtered_items()
+        .map(|hook| (hook.name.clone(), hook.hook_type.clone()))
+        .collect();
+    let count = app.hooks.len();
+
+    let items: Vec<ListItem> = hook_data
+        .iter()
+        .map(|(name, hook_type)| {
+            ListItem::new(Line::from(vec![
+                Span::styled(name.as_str(), theme::normal_style()),
+                Span::styled(format!("  [{}]", hook_type), theme::dim_style()),
+            ]))
+        })
+        .collect();
+
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .border_style(theme::border_style(is_focused))
+        .title(section_title(&format!("6 Hooks ({})", count), is_focused));
+
+    let list = List::new(items)
+        .block(block)
+        .highlight_style(theme::selected_style())
+        .highlight_symbol("▶ ");
+
+    f.render_stateful_widget(list, area, &mut app.hooks.list_state);
+
+    if app.input_mode == InputMode::Search && app.section == Section::Hooks {
+        draw_search_input(f, &app.hook_search.value, area);
+    }
+}
+
+/// Create a section title with focus indicator
+fn section_title(name: &str, focused: bool) -> Span<'static> {
+    let style = if focused {
+        theme::title_style()
+    } else {
+        theme::dim_style()
+    };
+    Span::styled(format!(" {} ", name), style)
 }
 
 /// Draw model create/edit form
@@ -277,135 +472,6 @@ fn draw_model_form(f: &mut Frame, app: &App, area: Rect) {
         Span::raw(":cancel"),
     ]);
     f.render_widget(Paragraph::new(help).alignment(Alignment::Center), chunks[5]);
-}
-
-/// Draw stacks tab
-fn draw_stacks(f: &mut Frame, app: &mut App, area: Rect) {
-    match app.view {
-        View::List => {
-            let chunks = Layout::default()
-                .direction(Direction::Horizontal)
-                .constraints([Constraint::Percentage(40), Constraint::Percentage(60)])
-                .split(area);
-
-            draw_stacks_list(f, app, chunks[0]);
-            draw_stack_detail(f, app, chunks[1]);
-        }
-        View::Detail => draw_stack_detail_full(f, app, area),
-        View::Edit | View::Create => draw_stack_form(f, app, area),
-        _ => {}
-    }
-}
-
-fn draw_stacks_list(f: &mut Frame, app: &mut App, area: Rect) {
-    // Collect data first to avoid borrow issues
-    let stack_data: Vec<_> = app
-        .stacks
-        .filtered_items()
-        .map(|stack| (stack.name.clone(), stack.source.clone()))
-        .collect();
-    let count = app.stacks.len();
-    let total = app.stacks.total_len();
-
-    let items: Vec<ListItem> = stack_data
-        .iter()
-        .map(|(name, source)| {
-            let source_hint = if source == "inline" { " [inline]" } else { "" };
-            ListItem::new(Line::from(vec![
-                Span::styled(name.as_str(), theme::normal_style()),
-                Span::styled(source_hint, theme::dim_style()),
-            ]))
-        })
-        .collect();
-
-    let title = format!(" Stacks ({}/{}) ", count, total);
-
-    let list = List::new(items)
-        .block(
-            Block::default()
-                .borders(Borders::ALL)
-                .border_style(theme::border_style(true))
-                .title(title),
-        )
-        .highlight_style(theme::selected_style())
-        .highlight_symbol("▶ ");
-
-    f.render_stateful_widget(list, area, &mut app.stacks.list_state);
-
-    if app.input_mode == InputMode::Search && app.tab == Tab::Stacks {
-        draw_search_input(f, &app.stack_search.value, area);
-    }
-}
-
-fn draw_stack_detail(f: &mut Frame, app: &App, area: Rect) {
-    let content = if let Some(stack) = app.stacks.selected() {
-        let mut lines = vec![
-            Line::from(vec![
-                Span::styled("Name: ", theme::dim_style()),
-                Span::styled(&stack.name, theme::normal_style()),
-            ]),
-        ];
-
-        if let Some(ref extends) = stack.config.extends {
-            lines.push(Line::from(vec![
-                Span::styled("Extends: ", theme::dim_style()),
-                Span::styled(extends, theme::info_style()),
-            ]));
-        }
-
-        if let Some(ref model) = stack.config.model {
-            lines.push(Line::from(vec![
-                Span::styled("Model: ", theme::dim_style()),
-                Span::styled(model, theme::normal_style()),
-            ]));
-        }
-
-        if let Some(ref skill) = stack.config.skill {
-            lines.push(Line::from(vec![
-                Span::styled("Skill: ", theme::dim_style()),
-                Span::styled(skill, theme::normal_style()),
-            ]));
-        }
-
-        if let Some(temp) = stack.config.temperature {
-            lines.push(Line::from(vec![
-                Span::styled("Temperature: ", theme::dim_style()),
-                Span::styled(format!("{:.1}", temp), theme::normal_style()),
-            ]));
-        }
-
-        if let Some(timeout) = stack.config.timeout {
-            lines.push(Line::from(vec![
-                Span::styled("Timeout: ", theme::dim_style()),
-                Span::styled(format!("{}ms", timeout), theme::normal_style()),
-            ]));
-        }
-
-        lines.push(Line::from(""));
-        lines.push(Line::from(vec![
-            Span::styled("Source: ", theme::dim_style()),
-            Span::styled(&stack.source, theme::dim_style()),
-        ]));
-
-        lines
-    } else {
-        vec![Line::from(Span::styled(
-            "No stack selected",
-            theme::dim_style(),
-        ))]
-    };
-
-    let block = Block::default()
-        .borders(Borders::ALL)
-        .border_style(theme::border_style(false))
-        .title(" Details ");
-
-    let paragraph = Paragraph::new(content).block(block);
-    f.render_widget(paragraph, area);
-}
-
-fn draw_stack_detail_full(f: &mut Frame, app: &App, area: Rect) {
-    draw_stack_detail(f, app, area);
 }
 
 /// Draw stack create/edit form
@@ -561,160 +627,6 @@ fn draw_stack_form(f: &mut Frame, app: &App, area: Rect) {
     f.render_widget(Paragraph::new(help).alignment(Alignment::Center), right_chunks[2]);
 }
 
-/// Draw skills tab
-fn draw_skills(f: &mut Frame, app: &mut App, area: Rect) {
-    match app.view {
-        View::List => {
-            let chunks = Layout::default()
-                .direction(Direction::Horizontal)
-                .constraints([Constraint::Percentage(40), Constraint::Percentage(60)])
-                .split(area);
-
-            draw_skills_list(f, app, chunks[0]);
-            draw_skill_detail(f, app, chunks[1]);
-        }
-        View::Detail => draw_skill_detail_full(f, app, area),
-        _ => {}
-    }
-}
-
-fn draw_skills_list(f: &mut Frame, app: &mut App, area: Rect) {
-    // Collect data first to avoid borrow issues
-    let skill_names: Vec<_> = app
-        .skills
-        .filtered_items()
-        .map(|skill| skill.name.clone())
-        .collect();
-    let count = app.skills.len();
-    let total = app.skills.total_len();
-
-    let items: Vec<ListItem> = skill_names
-        .iter()
-        .map(|name| ListItem::new(Line::from(vec![Span::styled(name.as_str(), theme::normal_style())])))
-        .collect();
-
-    let title = format!(" Skills ({}/{}) ", count, total);
-
-    let list = List::new(items)
-        .block(
-            Block::default()
-                .borders(Borders::ALL)
-                .border_style(theme::border_style(true))
-                .title(title),
-        )
-        .highlight_style(theme::selected_style())
-        .highlight_symbol("▶ ");
-
-    f.render_stateful_widget(list, area, &mut app.skills.list_state);
-
-    if app.input_mode == InputMode::Search && app.tab == Tab::Skills {
-        draw_search_input(f, &app.skill_search.value, area);
-    }
-}
-
-fn draw_skill_detail(f: &mut Frame, app: &App, area: Rect) {
-    let content = if let Some(skill) = app.skills.selected() {
-        let mut lines = vec![
-            Line::from(vec![
-                Span::styled("Name: ", theme::dim_style()),
-                Span::styled(&skill.name, theme::normal_style()),
-            ]),
-            Line::from(""),
-        ];
-
-        if !skill.description.is_empty() {
-            lines.push(Line::from(vec![Span::styled(
-                &skill.description,
-                theme::normal_style(),
-            )]));
-            lines.push(Line::from(""));
-        }
-
-        if let Some(ref license) = skill.license {
-            lines.push(Line::from(vec![
-                Span::styled("License: ", theme::dim_style()),
-                Span::styled(license, theme::normal_style()),
-            ]));
-        }
-
-        lines.push(Line::from(""));
-        lines.push(Line::from(vec![
-            Span::styled("Path: ", theme::dim_style()),
-            Span::styled(skill.path.to_string_lossy(), theme::dim_style()),
-        ]));
-
-        lines
-    } else {
-        vec![Line::from(Span::styled(
-            "No skill selected",
-            theme::dim_style(),
-        ))]
-    };
-
-    let block = Block::default()
-        .borders(Borders::ALL)
-        .border_style(theme::border_style(false))
-        .title(" Details ");
-
-    let paragraph = Paragraph::new(content).block(block);
-    f.render_widget(paragraph, area);
-}
-
-fn draw_skill_detail_full(f: &mut Frame, app: &App, area: Rect) {
-    draw_skill_detail(f, app, area);
-}
-
-/// Draw tools tab
-fn draw_tools(f: &mut Frame, app: &mut App, area: Rect) {
-    match app.view {
-        View::Create => draw_tool_form(f, app, area),
-        _ => draw_tools_list(f, app, area),
-    }
-}
-
-fn draw_tools_list(f: &mut Frame, app: &mut App, area: Rect) {
-    // Collect data first to avoid borrow issues
-    let tool_data: Vec<_> = app
-        .tools
-        .filtered_items()
-        .map(|tool| (tool.name.clone(), tool.enabled, tool.is_builtin))
-        .collect();
-    let count = app.tools.len();
-
-    let items: Vec<ListItem> = tool_data
-        .iter()
-        .map(|(name, enabled, is_builtin)| {
-            let status = if *enabled { "✓" } else { " " };
-            let status_style = if *enabled {
-                theme::success_style()
-            } else {
-                theme::dim_style()
-            };
-            let type_hint = if *is_builtin { "" } else { " (custom)" };
-
-            ListItem::new(Line::from(vec![
-                Span::styled(format!("[{}] ", status), status_style),
-                Span::styled(name.as_str(), theme::normal_style()),
-                Span::styled(type_hint, theme::dim_style()),
-            ]))
-        })
-        .collect();
-
-    let title = format!(" Tools ({}) ", count);
-
-    let list = List::new(items)
-        .block(
-            Block::default()
-                .borders(Borders::ALL)
-                .border_style(theme::border_style(true))
-                .title(title),
-        )
-        .highlight_style(theme::selected_style())
-        .highlight_symbol("▶ ");
-
-    f.render_stateful_widget(list, area, &mut app.tools.list_state);
-}
-
 /// Draw add custom tool form
 fn draw_tool_form(f: &mut Frame, app: &App, area: Rect) {
     let form = match &app.tool_form {
@@ -758,283 +670,6 @@ fn draw_tool_form(f: &mut Frame, app: &App, area: Rect) {
     f.render_widget(Paragraph::new(help).alignment(Alignment::Center), chunks[2]);
 }
 
-/// Draw hooks tab
-fn draw_hooks(f: &mut Frame, app: &mut App, area: Rect) {
-    match app.view {
-        View::List => {
-            let chunks = Layout::default()
-                .direction(Direction::Horizontal)
-                .constraints([Constraint::Percentage(40), Constraint::Percentage(60)])
-                .split(area);
-
-            draw_hooks_list(f, app, chunks[0]);
-            draw_hook_detail(f, app, chunks[1]);
-        }
-        View::Detail => draw_hook_detail_full(f, app, area),
-        _ => {}
-    }
-}
-
-fn draw_hooks_list(f: &mut Frame, app: &mut App, area: Rect) {
-    // Collect data first to avoid borrow issues
-    let hook_data: Vec<_> = app
-        .hooks
-        .filtered_items()
-        .map(|hook| (hook.name.clone(), hook.hook_type.clone()))
-        .collect();
-    let count = app.hooks.len();
-    let total = app.hooks.total_len();
-
-    let items: Vec<ListItem> = hook_data
-        .iter()
-        .map(|(name, hook_type)| {
-            ListItem::new(Line::from(vec![
-                Span::styled(name.as_str(), theme::normal_style()),
-                Span::styled(format!("  [{}]", hook_type), theme::dim_style()),
-            ]))
-        })
-        .collect();
-
-    let title = format!(" Hooks ({}/{}) ", count, total);
-
-    let list = List::new(items)
-        .block(
-            Block::default()
-                .borders(Borders::ALL)
-                .border_style(theme::border_style(true))
-                .title(title),
-        )
-        .highlight_style(theme::selected_style())
-        .highlight_symbol("▶ ");
-
-    f.render_stateful_widget(list, area, &mut app.hooks.list_state);
-
-    if app.input_mode == InputMode::Search && app.tab == Tab::Hooks {
-        draw_search_input(f, &app.hook_search.value, area);
-    }
-}
-
-fn draw_hook_detail(f: &mut Frame, app: &App, area: Rect) {
-    let content = if let Some(hook) = app.hooks.selected() {
-        vec![
-            Line::from(vec![
-                Span::styled("Name: ", theme::dim_style()),
-                Span::styled(&hook.name, theme::normal_style()),
-            ]),
-            Line::from(vec![
-                Span::styled("Type: ", theme::dim_style()),
-                Span::styled(&hook.hook_type, theme::normal_style()),
-            ]),
-            Line::from(""),
-            Line::from(vec![
-                Span::styled("Path: ", theme::dim_style()),
-                Span::styled(hook.path.to_string_lossy(), theme::dim_style()),
-            ]),
-        ]
-    } else {
-        vec![Line::from(Span::styled(
-            "No hook selected",
-            theme::dim_style(),
-        ))]
-    };
-
-    let block = Block::default()
-        .borders(Borders::ALL)
-        .border_style(theme::border_style(false))
-        .title(" Details ");
-
-    let paragraph = Paragraph::new(content).block(block);
-    f.render_widget(paragraph, area);
-}
-
-fn draw_hook_detail_full(f: &mut Frame, app: &App, area: Rect) {
-    draw_hook_detail(f, app, area);
-}
-
-/// Draw settings tab
-fn draw_settings(f: &mut Frame, app: &App, area: Rect) {
-    use crate::cli::CliStatus;
-
-    let mut content = vec![];
-
-    // Providers section - unified view of all provider options
-    content.push(Line::from(vec![Span::styled(
-        "Providers",
-        theme::title_style(),
-    )]));
-    content.push(Line::from(""));
-
-    match &app.cli_status {
-        CliStatus::Loading => {
-            content.push(Line::from(vec![
-                Span::styled("  ", theme::dim_style()),
-                Span::styled("Loading...", theme::dim_style()),
-            ]));
-        }
-        CliStatus::NotAvailable => {
-            content.push(Line::from(vec![
-                Span::styled("  ✗ ", theme::dim_style()),
-                Span::styled("CLI not found. Install cliffy CLI.", theme::normal_style()),
-            ]));
-        }
-        CliStatus::Error(e) => {
-            content.push(Line::from(vec![
-                Span::styled("  ✗ ", theme::dim_style()),
-                Span::styled(format!("Error: {}", e), theme::normal_style()),
-            ]));
-        }
-        CliStatus::Loaded(info) => {
-            // Show Claude Pro/Max (OAuth) as a first-class provider option
-            if let Some(auth) = info.auth.get("anthropic") {
-                let (icon, status_text) = if auth.authenticated && auth.method == "oauth" {
-                    let expires = auth.expires_at.as_ref().map(|e| {
-                        format!(" (expires: {})", &e[..10])
-                    }).unwrap_or_default();
-                    ("✓", format!("logged in{}", expires))
-                } else {
-                    ("○", "[L] to login".to_string())
-                };
-
-                content.push(Line::from(vec![
-                    Span::styled(format!("  {} ", icon), if auth.authenticated && auth.method == "oauth" {
-                        Style::default().fg(Color::Green)
-                    } else {
-                        theme::dim_style()
-                    }),
-                    Span::styled("Claude Pro/Max: ", theme::normal_style()),
-                    Span::styled(status_text, theme::dim_style()),
-                ]));
-            }
-
-            // Show other providers with their API key status
-            for (name, provider) in &info.providers {
-                let icon = if provider.has_key { "✓" } else { "○" };
-                let status = if provider.has_key {
-                    "API key set".to_string()
-                } else {
-                    "no API key".to_string()
-                };
-
-                content.push(Line::from(vec![
-                    Span::styled(format!("  {} ", icon), if provider.has_key {
-                        Style::default().fg(Color::Green)
-                    } else {
-                        theme::dim_style()
-                    }),
-                    Span::styled(format!("{}: ", name), theme::normal_style()),
-                    Span::styled(status, theme::dim_style()),
-                ]));
-            }
-
-            content.push(Line::from(""));
-            content.push(Line::from(vec![
-                Span::styled("  ", theme::dim_style()),
-                Span::styled("[L]", theme::title_style()),
-                Span::styled(" Claude Login  ", theme::dim_style()),
-                Span::styled("[r]", theme::title_style()),
-                Span::styled(" Refresh", theme::dim_style()),
-            ]));
-        }
-    }
-
-    content.push(Line::from(""));
-
-    // Configuration section
-    content.push(Line::from(vec![Span::styled(
-        "Configuration",
-        theme::title_style(),
-    )]));
-    content.push(Line::from(""));
-
-    content.push(Line::from(vec![
-        Span::styled("  Default Model: ", theme::dim_style()),
-        Span::styled(&app.config.default_model, theme::normal_style()),
-    ]));
-
-    if let CliStatus::Loaded(info) = &app.cli_status {
-        let global_icon = if info.config.global_exists { "✓" } else { "✗" };
-        let project_icon = if info.config.project_exists { "✓" } else { "-" };
-
-        content.push(Line::from(vec![
-            Span::styled(format!("  {} Global: ", global_icon), theme::dim_style()),
-            Span::styled(&info.config.global_path, theme::dim_style()),
-        ]));
-        content.push(Line::from(vec![
-            Span::styled(format!("  {} Project: ", project_icon), theme::dim_style()),
-            Span::styled(
-                if info.config.project_exists {
-                    info.config.project_path.as_str()
-                } else {
-                    "(none)"
-                },
-                theme::dim_style(),
-            ),
-        ]));
-    }
-
-    content.push(Line::from(""));
-
-    // Summary section
-    content.push(Line::from(vec![Span::styled(
-        "Summary",
-        theme::title_style(),
-    )]));
-    content.push(Line::from(""));
-
-    if let CliStatus::Loaded(info) = &app.cli_status {
-        content.push(Line::from(vec![
-            Span::styled("  Models: ", theme::dim_style()),
-            Span::styled(format!("{}", info.counts.models), theme::normal_style()),
-            Span::styled("  Stacks: ", theme::dim_style()),
-            Span::styled(format!("{}", info.counts.stacks), theme::normal_style()),
-            Span::styled("  Skills: ", theme::dim_style()),
-            Span::styled(format!("{}", info.counts.skills), theme::normal_style()),
-            Span::styled("  Hooks: ", theme::dim_style()),
-            Span::styled(format!("{}", info.counts.hooks), theme::normal_style()),
-        ]));
-        content.push(Line::from(vec![
-            Span::styled("  CLI version: ", theme::dim_style()),
-            Span::styled(&info.version, theme::normal_style()),
-        ]));
-    }
-
-    content.push(Line::from(""));
-
-    // Volley Settings
-    content.push(Line::from(vec![Span::styled(
-        "Volley Settings",
-        theme::title_style(),
-    )]));
-    content.push(Line::from(""));
-
-    content.push(Line::from(vec![
-        Span::styled("  Max Concurrent: ", theme::dim_style()),
-        Span::styled(
-            format!("{}", app.config.volley.max_concurrent),
-            theme::normal_style(),
-        ),
-    ]));
-    content.push(Line::from(vec![
-        Span::styled("  Retry Attempts: ", theme::dim_style()),
-        Span::styled(
-            format!("{}", app.config.volley.retry_attempts),
-            theme::normal_style(),
-        ),
-    ]));
-    content.push(Line::from(vec![
-        Span::styled("  Retry Backoff: ", theme::dim_style()),
-        Span::styled(&app.config.volley.retry_backoff, theme::normal_style()),
-    ]));
-
-    let block = Block::default()
-        .borders(Borders::ALL)
-        .border_style(theme::border_style(true))
-        .title(" Settings ");
-
-    let paragraph = Paragraph::new(content).block(block);
-    f.render_widget(paragraph, area);
-}
-
 /// Draw status bar
 fn draw_status_bar(f: &mut Frame, app: &App, area: Rect) {
     let mode_text = match app.input_mode {
@@ -1052,9 +687,9 @@ fn draw_status_bar(f: &mut Frame, app: &App, area: Rect) {
     };
 
     let hints = match app.view {
-        View::List => "j/k:navigate  /:search  Enter:select  d:delete  q:quit",
+        View::List => "Tab:section  j/k:nav  n:new  e:edit  d:del  q:quit",
         View::Detail => "h/Esc:back  e:edit  q:quit",
-        _ => "Esc:cancel  Enter:confirm",
+        _ => "Esc:cancel  Ctrl+S:save",
     };
 
     let chunks = Layout::default()
