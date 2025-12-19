@@ -4,6 +4,8 @@ use ratatui::style::{Color, Modifier, Style};
 pub const PRIMARY: Color = Color::Cyan;
 pub const SECONDARY: Color = Color::DarkGray;
 pub const ACCENT: Color = Color::Yellow;
+pub const MUTED: Color = Color::DarkGray;
+pub const BORDER: Color = Color::DarkGray;
 
 // Status colors
 pub const SUCCESS: Color = Color::Green;
@@ -37,6 +39,10 @@ pub fn normal_style() -> Style {
 
 pub fn dim_style() -> Style {
     Style::default().fg(Color::DarkGray)
+}
+
+pub fn highlight_style() -> Style {
+    Style::default().fg(ACCENT).add_modifier(Modifier::BOLD)
 }
 
 pub fn success_style() -> Style {

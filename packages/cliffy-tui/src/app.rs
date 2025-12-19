@@ -1,11 +1,212 @@
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use std::path::PathBuf;
+use tui_textarea::TextArea;
 
 use crate::data::{
     discover_hooks, discover_skills, discover_stacks, load_merged_config, save_config,
     CliffyConfig, HookInfo, ModelConfig, SkillInfo, StackConfig,
 };
-use crate::widgets::{ConfirmDialog, FilteredList, TextInput};
+use crate::widgets::{ConfirmDialog, FilteredList, TextInput, Toggle};
+
+/// Form mode for create vs edit
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FormMode {
+    Create,
+    Edit,
+}
+
+/// Model edit/create form
+#[derive(Debug, Clone)]
+pub struct ModelForm {
+    pub mode: FormMode,
+    pub original_alias: Option<String>,
+    pub focused_field: usize,
+    pub alias: TextInput,
+    pub provider: TextInput,
+    pub model: TextInput,
+    pub set_as_default: Toggle,
+}
+
+impl ModelForm {
+    pub fn new_create() -> Self {
+        Self {
+            mode: FormMode::Create,
+            original_alias: None,
+            focused_field: 0,
+            alias: TextInput::new().with_placeholder("e.g., fast, smart, claude"),
+            provider: TextInput::new().with_placeholder("e.g., anthropic, openai"),
+            model: TextInput::new().with_placeholder("e.g., claude-sonnet-4-20250514"),
+            set_as_default: Toggle::new("Set as default model"),
+        }
+    }
+
+    pub fn new_edit(alias: &str, config: &ModelConfig, is_default: bool) -> Self {
+        Self {
+            mode: FormMode::Edit,
+            original_alias: Some(alias.to_string()),
+            focused_field: 0,
+            alias: TextInput::new().with_value(alias),
+            provider: TextInput::new().with_value(&config.provider),
+            model: TextInput::new().with_value(&config.model),
+            set_as_default: Toggle::new("Set as default model").with_value(is_default),
+        }
+    }
+
+    pub fn field_count() -> usize {
+        4  // alias, provider, model, set_as_default
+    }
+
+    pub fn next_field(&mut self) {
+        self.focused_field = (self.focused_field + 1) % Self::field_count();
+    }
+
+    pub fn prev_field(&mut self) {
+        self.focused_field = self.focused_field.checked_sub(1).unwrap_or(Self::field_count() - 1);
+    }
+
+    pub fn validate(&self) -> Vec<String> {
+        let mut errors = Vec::new();
+        if self.alias.value.trim().is_empty() {
+            errors.push("Alias is required".to_string());
+        }
+        if self.provider.value.trim().is_empty() {
+            errors.push("Provider is required".to_string());
+        }
+        if self.model.value.trim().is_empty() {
+            errors.push("Model is required".to_string());
+        }
+        errors
+    }
+}
+
+/// Stack edit/create form
+pub struct StackForm {
+    pub mode: FormMode,
+    pub original_name: Option<String>,
+    pub focused_field: usize,
+    pub name: TextInput,
+    pub extends: TextInput,
+    pub model: TextInput,
+    pub temperature: TextInput,
+    pub timeout: TextInput,
+    pub max_tokens: TextInput,
+    pub skill: TextInput,
+    pub context: TextArea<'static>,
+    pub context_file: TextInput,
+    pub unrestricted: Toggle,
+}
+
+impl StackForm {
+    pub fn new_create() -> Self {
+        let mut context = TextArea::default();
+        context.set_placeholder_text("Multi-line context (optional)");
+
+        Self {
+            mode: FormMode::Create,
+            original_name: None,
+            focused_field: 0,
+            name: TextInput::new().with_placeholder("e.g., codex-architect"),
+            extends: TextInput::new().with_placeholder("Base stack to extend (optional)"),
+            model: TextInput::new().with_placeholder("Model alias (optional)"),
+            temperature: TextInput::new().with_placeholder("0.0 - 2.0 (optional)"),
+            timeout: TextInput::new().with_placeholder("Timeout in ms (optional)"),
+            max_tokens: TextInput::new().with_placeholder("Max tokens (optional)"),
+            skill: TextInput::new().with_placeholder("Skill name (optional)"),
+            context,
+            context_file: TextInput::new().with_placeholder("Path to context file (optional)"),
+            unrestricted: Toggle::new("Unrestricted mode"),
+        }
+    }
+
+    pub fn new_edit(name: &str, config: &StackConfig) -> Self {
+        let mut context = TextArea::default();
+        if let Some(ref ctx) = config.context {
+            context = TextArea::new(ctx.lines().map(String::from).collect());
+        }
+
+        Self {
+            mode: FormMode::Edit,
+            original_name: Some(name.to_string()),
+            focused_field: 0,
+            name: TextInput::new().with_value(name),
+            extends: TextInput::new().with_value(config.extends.as_deref().unwrap_or("")),
+            model: TextInput::new().with_value(config.model.as_deref().unwrap_or("")),
+            temperature: TextInput::new().with_value(
+                &config.temperature.map(|t| t.to_string()).unwrap_or_default()
+            ),
+            timeout: TextInput::new().with_value(
+                &config.timeout.map(|t| t.to_string()).unwrap_or_default()
+            ),
+            max_tokens: TextInput::new().with_value(
+                &config.max_tokens.map(|t| t.to_string()).unwrap_or_default()
+            ),
+            skill: TextInput::new().with_value(config.skill.as_deref().unwrap_or("")),
+            context,
+            context_file: TextInput::new().with_value(config.context_file.as_deref().unwrap_or("")),
+            unrestricted: Toggle::new("Unrestricted mode").with_value(config.unrestricted.unwrap_or(false)),
+        }
+    }
+
+    pub fn field_count() -> usize {
+        10  // name, extends, model, temperature, timeout, max_tokens, skill, context, context_file, unrestricted
+    }
+
+    pub fn next_field(&mut self) {
+        self.focused_field = (self.focused_field + 1) % Self::field_count();
+    }
+
+    pub fn prev_field(&mut self) {
+        self.focused_field = self.focused_field.checked_sub(1).unwrap_or(Self::field_count() - 1);
+    }
+
+    pub fn validate(&self) -> Vec<String> {
+        let mut errors = Vec::new();
+        if self.name.value.trim().is_empty() {
+            errors.push("Name is required".to_string());
+        }
+        // Validate temperature if provided
+        if !self.temperature.value.trim().is_empty() {
+            if let Err(_) = self.temperature.value.trim().parse::<f64>() {
+                errors.push("Temperature must be a number".to_string());
+            }
+        }
+        // Validate timeout if provided
+        if !self.timeout.value.trim().is_empty() {
+            if let Err(_) = self.timeout.value.trim().parse::<u64>() {
+                errors.push("Timeout must be a positive number".to_string());
+            }
+        }
+        // Validate max_tokens if provided
+        if !self.max_tokens.value.trim().is_empty() {
+            if let Err(_) = self.max_tokens.value.trim().parse::<u32>() {
+                errors.push("Max tokens must be a positive number".to_string());
+            }
+        }
+        errors
+    }
+}
+
+/// Tool add form (for custom tools)
+#[derive(Debug, Clone)]
+pub struct ToolForm {
+    pub path: TextInput,
+}
+
+impl ToolForm {
+    pub fn new() -> Self {
+        Self {
+            path: TextInput::new().with_placeholder("Path to custom tool executable"),
+        }
+    }
+
+    pub fn validate(&self) -> Vec<String> {
+        let mut errors = Vec::new();
+        if self.path.value.trim().is_empty() {
+            errors.push("Path is required".to_string());
+        }
+        errors
+    }
+}
 
 /// Main tabs
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -144,6 +345,8 @@ pub struct App {
 
     // Tools tab state
     pub tools: FilteredList<ToolItem>,
+    pub tool_search: TextInput,
+    pub tool_form: Option<ToolForm>,
 
     // Hooks tab state
     pub hooks: FilteredList<HookInfo>,
@@ -152,6 +355,10 @@ pub struct App {
     // Dialogs
     pub confirm_dialog: Option<ConfirmDialog>,
     pub pending_action: Option<PendingAction>,
+
+    // Forms
+    pub model_form: Option<ModelForm>,
+    pub stack_form: Option<StackForm>,
 }
 
 /// Pending action that needs confirmation
@@ -159,6 +366,7 @@ pub struct App {
 pub enum PendingAction {
     DeleteModel(String),
     DeleteStack(String),
+    DeleteTool(String),
     Quit,
 }
 
@@ -182,10 +390,14 @@ impl App {
             skills: FilteredList::new(vec![]),
             skill_search: TextInput::new().with_placeholder("Search skills..."),
             tools: FilteredList::new(vec![]),
+            tool_search: TextInput::new().with_placeholder("Search tools..."),
+            tool_form: None,
             hooks: FilteredList::new(vec![]),
             hook_search: TextInput::new().with_placeholder("Search hooks..."),
             confirm_dialog: None,
             pending_action: None,
+            model_form: None,
+            stack_form: None,
         };
 
         app.refresh_all();
@@ -265,6 +477,20 @@ impl App {
         // Handle confirm dialog first
         if self.confirm_dialog.is_some() {
             self.handle_confirm_key(key);
+            return;
+        }
+
+        // Handle form mode
+        if self.model_form.is_some() {
+            self.handle_model_form_key(key);
+            return;
+        }
+        if self.stack_form.is_some() {
+            self.handle_stack_form_key(key);
+            return;
+        }
+        if self.tool_form.is_some() {
+            self.handle_tool_form_key(key);
             return;
         }
 
@@ -350,6 +576,14 @@ impl App {
             KeyCode::Char(' ') if self.tab == Tab::Tools => {
                 self.toggle_selected_tool();
             }
+            // Create new
+            KeyCode::Char('n') => {
+                self.start_create();
+            }
+            // Edit selected (shortcut from list)
+            KeyCode::Char('e') => {
+                self.start_edit();
+            }
             // Delete
             KeyCode::Char('d') => {
                 self.confirm_delete();
@@ -364,7 +598,7 @@ impl App {
                 self.view = View::List;
             }
             KeyCode::Char('e') => {
-                // TODO: Enter edit mode
+                self.start_edit();
             }
             _ => {}
         }
@@ -384,6 +618,7 @@ impl App {
                     Tab::Models => &mut self.model_search,
                     Tab::Stacks => &mut self.stack_search,
                     Tab::Skills => &mut self.skill_search,
+                    Tab::Tools => &mut self.tool_search,
                     Tab::Hooks => &mut self.hook_search,
                     _ => return,
                 };
@@ -461,6 +696,11 @@ impl App {
                         || item.description.to_lowercase().contains(&query)
                 });
             }
+            Tab::Tools => {
+                let query = self.tool_search.value.to_lowercase();
+                self.tools
+                    .apply_filter(|item| item.name.to_lowercase().contains(&query));
+            }
             Tab::Hooks => {
                 let query = self.hook_search.value.to_lowercase();
                 self.hooks
@@ -483,6 +723,10 @@ impl App {
             Tab::Skills => {
                 self.skill_search.clear();
                 self.skills.clear_filter();
+            }
+            Tab::Tools => {
+                self.tool_search.clear();
+                self.tools.clear_filter();
             }
             Tab::Hooks => {
                 self.hook_search.clear();
@@ -532,6 +776,17 @@ impl App {
                     self.pending_action = Some(PendingAction::DeleteStack(stack.name.clone()));
                 }
             }
+            Tab::Tools => {
+                if let Some(tool) = self.tools.selected() {
+                    if !tool.is_builtin {
+                        self.confirm_dialog = Some(ConfirmDialog::new(
+                            "Remove Tool",
+                            &format!("Remove custom tool '{}'?", tool.name),
+                        ));
+                        self.pending_action = Some(PendingAction::DeleteTool(tool.name.clone()));
+                    }
+                }
+            }
             _ => {}
         }
     }
@@ -550,6 +805,12 @@ impl App {
                 self.refresh_stacks();
                 self.status_message = Some(format!("Deleted stack '{}'", name));
             }
+            PendingAction::DeleteTool(path) => {
+                self.config.tools.custom.retain(|t| t != &path);
+                self.dirty = true;
+                self.refresh_tools();
+                self.status_message = Some(format!("Removed tool '{}'", path));
+            }
             PendingAction::Quit => {
                 self.should_quit = true;
             }
@@ -566,5 +827,317 @@ impl App {
                 self.status_message = Some(format!("Save failed: {}", e));
             }
         }
+    }
+
+    // Form handling
+
+    fn start_create(&mut self) {
+        match self.tab {
+            Tab::Models => {
+                self.model_form = Some(ModelForm::new_create());
+                self.view = View::Create;
+                self.input_mode = InputMode::Editing;
+            }
+            Tab::Stacks => {
+                self.stack_form = Some(StackForm::new_create());
+                self.view = View::Create;
+                self.input_mode = InputMode::Editing;
+            }
+            Tab::Tools => {
+                self.tool_form = Some(ToolForm::new());
+                self.view = View::Create;
+                self.input_mode = InputMode::Editing;
+            }
+            // TODO: Add other tabs
+            _ => {}
+        }
+    }
+
+    fn start_edit(&mut self) {
+        match self.tab {
+            Tab::Models => {
+                if let Some(model) = self.models.selected() {
+                    let is_default = self.config.default_model == model.alias;
+                    self.model_form = Some(ModelForm::new_edit(&model.alias, &model.config, is_default));
+                    self.view = View::Edit;
+                    self.input_mode = InputMode::Editing;
+                }
+            }
+            Tab::Stacks => {
+                if let Some(stack) = self.stacks.selected() {
+                    self.stack_form = Some(StackForm::new_edit(&stack.name, &stack.config));
+                    self.view = View::Edit;
+                    self.input_mode = InputMode::Editing;
+                }
+            }
+            // TODO: Add other tabs
+            _ => {}
+        }
+    }
+
+    fn handle_model_form_key(&mut self, key: KeyEvent) {
+        // Ctrl+S to save
+        if key.modifiers.contains(KeyModifiers::CONTROL) && key.code == KeyCode::Char('s') {
+            self.save_model_form();
+            return;
+        }
+
+        // Esc to cancel
+        if key.code == KeyCode::Esc {
+            self.cancel_form();
+            return;
+        }
+
+        // Get the form mutably
+        let form = match self.model_form.as_mut() {
+            Some(f) => f,
+            None => return,
+        };
+
+        match key.code {
+            // Tab navigation between fields
+            KeyCode::Tab => {
+                form.next_field();
+            }
+            KeyCode::BackTab => {
+                form.prev_field();
+            }
+            // Handle input based on focused field
+            _ => {
+                match form.focused_field {
+                    0 => { form.alias.handle_key(key); }
+                    1 => { form.provider.handle_key(key); }
+                    2 => { form.model.handle_key(key); }
+                    3 => { form.set_as_default.handle_key(key); }
+                    _ => {}
+                }
+            }
+        }
+    }
+
+    fn save_model_form(&mut self) {
+        let form = match self.model_form.take() {
+            Some(f) => f,
+            None => return,
+        };
+
+        // Validate
+        let errors = form.validate();
+        if !errors.is_empty() {
+            self.status_message = Some(errors.join(", "));
+            self.model_form = Some(form);
+            return;
+        }
+
+        let alias = form.alias.value.trim().to_string();
+        let config = ModelConfig {
+            provider: form.provider.value.trim().to_string(),
+            model: form.model.value.trim().to_string(),
+        };
+
+        // If editing and alias changed, remove old entry
+        if let Some(original) = &form.original_alias {
+            if original != &alias {
+                self.config.models.remove(original);
+            }
+        }
+
+        // Insert/update model
+        self.config.models.insert(alias.clone(), config);
+
+        // Set as default if toggled
+        if form.set_as_default.value {
+            self.config.default_model = alias.clone();
+        }
+
+        self.dirty = true;
+        self.refresh_models();
+        self.view = View::List;
+        self.input_mode = InputMode::Normal;
+
+        let action = if form.mode == FormMode::Create { "Created" } else { "Updated" };
+        self.status_message = Some(format!("{} model '{}'", action, alias));
+    }
+
+    fn handle_stack_form_key(&mut self, key: KeyEvent) {
+        // Ctrl+S to save
+        if key.modifiers.contains(KeyModifiers::CONTROL) && key.code == KeyCode::Char('s') {
+            self.save_stack_form();
+            return;
+        }
+
+        // Esc to cancel
+        if key.code == KeyCode::Esc {
+            self.cancel_form();
+            return;
+        }
+
+        // Get the form mutably
+        let form = match self.stack_form.as_mut() {
+            Some(f) => f,
+            None => return,
+        };
+
+        match key.code {
+            // Tab navigation between fields
+            KeyCode::Tab => {
+                form.next_field();
+            }
+            KeyCode::BackTab => {
+                form.prev_field();
+            }
+            // Handle input based on focused field
+            _ => {
+                match form.focused_field {
+                    0 => { form.name.handle_key(key); }
+                    1 => { form.extends.handle_key(key); }
+                    2 => { form.model.handle_key(key); }
+                    3 => { form.temperature.handle_key(key); }
+                    4 => { form.timeout.handle_key(key); }
+                    5 => { form.max_tokens.handle_key(key); }
+                    6 => { form.skill.handle_key(key); }
+                    7 => {
+                        // TextArea handles its own input
+                        form.context.input(key);
+                    }
+                    8 => { form.context_file.handle_key(key); }
+                    9 => { form.unrestricted.handle_key(key); }
+                    _ => {}
+                }
+            }
+        }
+    }
+
+    fn save_stack_form(&mut self) {
+        let form = match self.stack_form.take() {
+            Some(f) => f,
+            None => return,
+        };
+
+        // Validate
+        let errors = form.validate();
+        if !errors.is_empty() {
+            self.status_message = Some(errors.join(", "));
+            self.stack_form = Some(form);
+            return;
+        }
+
+        let name = form.name.value.trim().to_string();
+
+        // Build config from form
+        let config = StackConfig {
+            name: Some(name.clone()),
+            extends: if form.extends.value.trim().is_empty() {
+                None
+            } else {
+                Some(form.extends.value.trim().to_string())
+            },
+            model: if form.model.value.trim().is_empty() {
+                None
+            } else {
+                Some(form.model.value.trim().to_string())
+            },
+            temperature: form.temperature.value.trim().parse().ok(),
+            timeout: form.timeout.value.trim().parse().ok(),
+            max_tokens: form.max_tokens.value.trim().parse().ok(),
+            skill: if form.skill.value.trim().is_empty() {
+                None
+            } else {
+                Some(form.skill.value.trim().to_string())
+            },
+            context: {
+                let text: String = form.context.lines().join("\n");
+                if text.trim().is_empty() { None } else { Some(text) }
+            },
+            context_file: if form.context_file.value.trim().is_empty() {
+                None
+            } else {
+                Some(form.context_file.value.trim().to_string())
+            },
+            unrestricted: if form.unrestricted.value { Some(true) } else { None },
+        };
+
+        // If editing and name changed, remove old entry
+        if let Some(original) = &form.original_name {
+            if original != &name {
+                self.config.stacks.remove(original);
+            }
+        }
+
+        // Insert/update stack
+        self.config.stacks.insert(name.clone(), config);
+
+        self.dirty = true;
+        self.refresh_stacks();
+        self.view = View::List;
+        self.input_mode = InputMode::Normal;
+
+        let action = if form.mode == FormMode::Create { "Created" } else { "Updated" };
+        self.status_message = Some(format!("{} stack '{}'", action, name));
+    }
+
+    fn handle_tool_form_key(&mut self, key: KeyEvent) {
+        // Ctrl+S to save
+        if key.modifiers.contains(KeyModifiers::CONTROL) && key.code == KeyCode::Char('s') {
+            self.save_tool_form();
+            return;
+        }
+
+        // Esc to cancel
+        if key.code == KeyCode::Esc {
+            self.cancel_form();
+            return;
+        }
+
+        // Get the form mutably
+        let form = match self.tool_form.as_mut() {
+            Some(f) => f,
+            None => return,
+        };
+
+        // Handle input for path field
+        form.path.handle_key(key);
+    }
+
+    fn save_tool_form(&mut self) {
+        let form = match self.tool_form.take() {
+            Some(f) => f,
+            None => return,
+        };
+
+        // Validate
+        let errors = form.validate();
+        if !errors.is_empty() {
+            self.status_message = Some(errors.join(", "));
+            self.tool_form = Some(form);
+            return;
+        }
+
+        let path = form.path.value.trim().to_string();
+
+        // Check if already exists
+        if self.config.tools.custom.contains(&path) {
+            self.status_message = Some("Tool already exists".to_string());
+            self.tool_form = Some(form);
+            return;
+        }
+
+        // Add to custom tools
+        self.config.tools.custom.push(path.clone());
+
+        self.dirty = true;
+        self.refresh_tools();
+        self.view = View::List;
+        self.input_mode = InputMode::Normal;
+        self.status_message = Some(format!("Added tool '{}'", path));
+    }
+
+    fn cancel_form(&mut self) {
+        self.model_form = None;
+        self.stack_form = None;
+        self.tool_form = None;
+        self.view = View::List;
+        self.input_mode = InputMode::Normal;
+        self.status_message = Some("Cancelled".to_string());
     }
 }

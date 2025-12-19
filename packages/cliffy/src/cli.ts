@@ -52,12 +52,16 @@ Skills Commands:
   cliffy skills create <name>     Create a new skill template
   cliffy skills validate <path>   Validate a skill
 
+Setup:
+  cliffy setup                    Open the config TUI
+
 Examples:
   cliffy "fix the bug in parser.go"
   cliffy as codex52-architect "review spec and create implementation plan"
   cliffy as trivia-expert "circumference of earth in miles"
   cliffy --skill security-review "analyze this codebase"
   cliffy --fast "what does this function do?" "test the auth flow"
+  cliffy setup
   cliffy stacks list
   cliffy skills list
 `;
@@ -196,6 +200,21 @@ async function loadVersion(): Promise<string> {
 
 async function main() {
   let args = process.argv.slice(2);
+
+  // Handle setup command - launches the config TUI
+  if (args[0] === 'setup') {
+    const { spawnSync } = await import('child_process');
+    const result = spawnSync('cliffy-tui', [], { stdio: 'inherit' });
+    if (result.error) {
+      // Try cargo run as fallback for development
+      const cargoResult = spawnSync('cargo', ['run', '--manifest-path', 'packages/cliffy-tui/Cargo.toml'], { stdio: 'inherit' });
+      if (cargoResult.error) {
+        console.error('Could not launch config TUI. Install cliffy-tui or run from repo root.');
+        process.exitCode = 1;
+      }
+    }
+    return;
+  }
 
   // Handle skills commands
   if (args[0] === 'skills') {

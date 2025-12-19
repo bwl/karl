@@ -1,6 +1,7 @@
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
 /// Simple text input widget
+#[derive(Debug, Clone)]
 pub struct TextInput {
     pub value: String,
     pub cursor: usize,

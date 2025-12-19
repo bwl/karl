@@ -1,13 +1,14 @@
 use ratatui::{
     layout::{Alignment, Constraint, Direction, Layout, Rect},
-    style::{Modifier, Style},
+    style::{Color, Modifier, Style},
     text::{Line, Span},
     widgets::{Block, Borders, Clear, List, ListItem, Paragraph, Tabs},
     Frame,
 };
 
-use crate::app::{App, InputMode, Tab, View};
+use crate::app::{App, FormMode, InputMode, Tab, View};
 use crate::theme;
+use crate::widgets::{FormFieldWidget, ToggleFieldWidget};
 
 /// Main draw function
 pub fn draw(f: &mut Frame, app: &mut App) {
@@ -85,6 +86,7 @@ fn draw_models(f: &mut Frame, app: &mut App, area: Rect) {
             draw_model_detail(f, app, chunks[1]);
         }
         View::Detail => draw_model_detail_full(f, app, area),
+        View::Edit | View::Create => draw_model_form(f, app, area),
         _ => {}
     }
 }
@@ -178,6 +180,83 @@ fn draw_model_detail_full(f: &mut Frame, app: &App, area: Rect) {
     draw_model_detail(f, app, area);
 }
 
+/// Draw model create/edit form
+fn draw_model_form(f: &mut Frame, app: &App, area: Rect) {
+    let form = match &app.model_form {
+        Some(f) => f,
+        None => return,
+    };
+
+    let title = match form.mode {
+        FormMode::Create => " New Model ",
+        FormMode::Edit => " Edit Model ",
+    };
+
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .border_style(theme::border_style(true))
+        .title(title);
+
+    let inner = block.inner(area);
+    f.render_widget(block, area);
+
+    // Layout fields vertically
+    let chunks = Layout::default()
+        .direction(Direction::Vertical)
+        .margin(1)
+        .constraints([
+            Constraint::Length(3), // Alias
+            Constraint::Length(3), // Provider
+            Constraint::Length(3), // Model
+            Constraint::Length(2), // Set as default toggle
+            Constraint::Min(0),    // Spacer
+            Constraint::Length(1), // Help line
+        ])
+        .split(inner);
+
+    // Alias field
+    let alias_widget = FormFieldWidget::new("Alias", &form.alias.value)
+        .focused(form.focused_field == 0)
+        .cursor(form.alias.cursor)
+        .required(true)
+        .placeholder(Some(&form.alias.placeholder));
+    f.render_widget(alias_widget, chunks[0]);
+
+    // Provider field
+    let provider_widget = FormFieldWidget::new("Provider", &form.provider.value)
+        .focused(form.focused_field == 1)
+        .cursor(form.provider.cursor)
+        .required(true)
+        .placeholder(Some(&form.provider.placeholder));
+    f.render_widget(provider_widget, chunks[1]);
+
+    // Model field
+    let model_widget = FormFieldWidget::new("Model ID", &form.model.value)
+        .focused(form.focused_field == 2)
+        .cursor(form.model.cursor)
+        .required(true)
+        .placeholder(Some(&form.model.placeholder));
+    f.render_widget(model_widget, chunks[2]);
+
+    // Set as default toggle
+    let toggle_widget = ToggleFieldWidget::new("Set as default model", form.set_as_default.value)
+        .focused(form.focused_field == 3);
+    f.render_widget(toggle_widget, chunks[3]);
+
+    // Help line
+    let help = Line::from(vec![
+        Span::styled("Tab", theme::highlight_style()),
+        Span::raw(":next  "),
+        Span::styled("Shift+Tab", theme::highlight_style()),
+        Span::raw(":prev  "),
+        Span::styled("Ctrl+S", theme::highlight_style()),
+        Span::raw(":save  "),
+        Span::styled("Esc", theme::highlight_style()),
+        Span::raw(":cancel"),
+    ]);
+    f.render_widget(Paragraph::new(help).alignment(Alignment::Center), chunks[5]);
+}
+
 /// Draw stacks tab
 fn draw_stacks(f: &mut Frame, app: &mut App, area: Rect) {
     match app.view {
@@ -191,6 +270,7 @@ fn draw_stacks(f: &mut Frame, app: &mut App, area: Rect) {
             draw_stack_detail(f, app, chunks[1]);
         }
         View::Detail => draw_stack_detail_full(f, app, area),
+        View::Edit | View::Create => draw_stack_form(f, app, area),
         _ => {}
     }
 }
@@ -306,6 +386,159 @@ fn draw_stack_detail_full(f: &mut Frame, app: &App, area: Rect) {
     draw_stack_detail(f, app, area);
 }
 
+/// Draw stack create/edit form
+fn draw_stack_form(f: &mut Frame, app: &App, area: Rect) {
+    let form = match &app.stack_form {
+        Some(f) => f,
+        None => return,
+    };
+
+    let title = match form.mode {
+        FormMode::Create => " New Stack ",
+        FormMode::Edit => " Edit Stack ",
+    };
+
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .border_style(theme::border_style(true))
+        .title(title);
+
+    let inner = block.inner(area);
+    f.render_widget(block, area);
+
+    // Layout: left column for simple fields, right column for context TextArea
+    let main_chunks = Layout::default()
+        .direction(Direction::Horizontal)
+        .margin(1)
+        .constraints([Constraint::Percentage(50), Constraint::Percentage(50)])
+        .split(inner);
+
+    // Left column: simple fields
+    let left_chunks = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([
+            Constraint::Length(2), // Name
+            Constraint::Length(2), // Extends
+            Constraint::Length(2), // Model
+            Constraint::Length(2), // Temperature
+            Constraint::Length(2), // Timeout
+            Constraint::Length(2), // Max tokens
+            Constraint::Length(2), // Skill
+            Constraint::Length(2), // Context file
+            Constraint::Length(2), // Unrestricted
+            Constraint::Min(0),    // Spacer
+        ])
+        .split(main_chunks[0]);
+
+    // Name field
+    let name_widget = FormFieldWidget::new("Name *", &form.name.value)
+        .focused(form.focused_field == 0)
+        .cursor(form.name.cursor)
+        .placeholder(Some(&form.name.placeholder));
+    f.render_widget(name_widget, left_chunks[0]);
+
+    // Extends field
+    let extends_widget = FormFieldWidget::new("Extends", &form.extends.value)
+        .focused(form.focused_field == 1)
+        .cursor(form.extends.cursor)
+        .placeholder(Some(&form.extends.placeholder));
+    f.render_widget(extends_widget, left_chunks[1]);
+
+    // Model field
+    let model_widget = FormFieldWidget::new("Model", &form.model.value)
+        .focused(form.focused_field == 2)
+        .cursor(form.model.cursor)
+        .placeholder(Some(&form.model.placeholder));
+    f.render_widget(model_widget, left_chunks[2]);
+
+    // Temperature field
+    let temp_widget = FormFieldWidget::new("Temperature", &form.temperature.value)
+        .focused(form.focused_field == 3)
+        .cursor(form.temperature.cursor)
+        .placeholder(Some(&form.temperature.placeholder));
+    f.render_widget(temp_widget, left_chunks[3]);
+
+    // Timeout field
+    let timeout_widget = FormFieldWidget::new("Timeout (ms)", &form.timeout.value)
+        .focused(form.focused_field == 4)
+        .cursor(form.timeout.cursor)
+        .placeholder(Some(&form.timeout.placeholder));
+    f.render_widget(timeout_widget, left_chunks[4]);
+
+    // Max tokens field
+    let max_tokens_widget = FormFieldWidget::new("Max Tokens", &form.max_tokens.value)
+        .focused(form.focused_field == 5)
+        .cursor(form.max_tokens.cursor)
+        .placeholder(Some(&form.max_tokens.placeholder));
+    f.render_widget(max_tokens_widget, left_chunks[5]);
+
+    // Skill field
+    let skill_widget = FormFieldWidget::new("Skill", &form.skill.value)
+        .focused(form.focused_field == 6)
+        .cursor(form.skill.cursor)
+        .placeholder(Some(&form.skill.placeholder));
+    f.render_widget(skill_widget, left_chunks[6]);
+
+    // Context file field
+    let context_file_widget = FormFieldWidget::new("Context File", &form.context_file.value)
+        .focused(form.focused_field == 8)
+        .cursor(form.context_file.cursor)
+        .placeholder(Some(&form.context_file.placeholder));
+    f.render_widget(context_file_widget, left_chunks[7]);
+
+    // Unrestricted toggle
+    let unrestricted_widget = ToggleFieldWidget::new("Unrestricted mode", form.unrestricted.value)
+        .focused(form.focused_field == 9);
+    f.render_widget(unrestricted_widget, left_chunks[8]);
+
+    // Right column: Context TextArea
+    let right_chunks = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([
+            Constraint::Length(1), // Label
+            Constraint::Min(5),    // TextArea
+            Constraint::Length(2), // Help
+        ])
+        .split(main_chunks[1]);
+
+    // Context label
+    let context_label_style = if form.focused_field == 7 {
+        theme::highlight_style()
+    } else {
+        theme::normal_style()
+    };
+    f.render_widget(
+        Paragraph::new(Span::styled("Context (multi-line)", context_label_style)),
+        right_chunks[0],
+    );
+
+    // Context TextArea - render with border
+    let textarea_block = Block::default()
+        .borders(Borders::ALL)
+        .border_style(if form.focused_field == 7 {
+            Style::default().fg(theme::ACCENT)
+        } else {
+            Style::default().fg(theme::BORDER)
+        });
+
+    let textarea_inner = textarea_block.inner(right_chunks[1]);
+    f.render_widget(textarea_block, right_chunks[1]);
+
+    // Render the TextArea widget directly
+    f.render_widget(&form.context, textarea_inner);
+
+    // Help line
+    let help = Line::from(vec![
+        Span::styled("Tab", theme::highlight_style()),
+        Span::raw(":next  "),
+        Span::styled("Ctrl+S", theme::highlight_style()),
+        Span::raw(":save  "),
+        Span::styled("Esc", theme::highlight_style()),
+        Span::raw(":cancel"),
+    ]);
+    f.render_widget(Paragraph::new(help).alignment(Alignment::Center), right_chunks[2]);
+}
+
 /// Draw skills tab
 fn draw_skills(f: &mut Frame, app: &mut App, area: Rect) {
     match app.view {
@@ -411,6 +644,13 @@ fn draw_skill_detail_full(f: &mut Frame, app: &App, area: Rect) {
 
 /// Draw tools tab
 fn draw_tools(f: &mut Frame, app: &mut App, area: Rect) {
+    match app.view {
+        View::Create => draw_tool_form(f, app, area),
+        _ => draw_tools_list(f, app, area),
+    }
+}
+
+fn draw_tools_list(f: &mut Frame, app: &mut App, area: Rect) {
     // Collect data first to avoid borrow issues
     let tool_data: Vec<_> = app
         .tools
@@ -451,6 +691,49 @@ fn draw_tools(f: &mut Frame, app: &mut App, area: Rect) {
         .highlight_symbol("▶ ");
 
     f.render_stateful_widget(list, area, &mut app.tools.list_state);
+}
+
+/// Draw add custom tool form
+fn draw_tool_form(f: &mut Frame, app: &App, area: Rect) {
+    let form = match &app.tool_form {
+        Some(f) => f,
+        None => return,
+    };
+
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .border_style(theme::border_style(true))
+        .title(" Add Custom Tool ");
+
+    let inner = block.inner(area);
+    f.render_widget(block, area);
+
+    let chunks = Layout::default()
+        .direction(Direction::Vertical)
+        .margin(1)
+        .constraints([
+            Constraint::Length(3), // Path
+            Constraint::Min(0),    // Spacer
+            Constraint::Length(1), // Help line
+        ])
+        .split(inner);
+
+    // Path field
+    let path_widget = FormFieldWidget::new("Tool Path", &form.path.value)
+        .focused(true)
+        .cursor(form.path.cursor)
+        .required(true)
+        .placeholder(Some(&form.path.placeholder));
+    f.render_widget(path_widget, chunks[0]);
+
+    // Help line
+    let help = Line::from(vec![
+        Span::styled("Ctrl+S", theme::highlight_style()),
+        Span::raw(":save  "),
+        Span::styled("Esc", theme::highlight_style()),
+        Span::raw(":cancel"),
+    ]);
+    f.render_widget(Paragraph::new(help).alignment(Alignment::Center), chunks[2]);
 }
 
 /// Draw hooks tab
