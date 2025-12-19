@@ -8,7 +8,7 @@ use crate::data::{
     discover_hooks, discover_skills, discover_stacks, load_merged_config, save_config,
     CliffyConfig, HookInfo, ModelConfig, SkillInfo, StackConfig,
 };
-use crate::widgets::{ConfirmDialog, FilteredList, TextInput, Toggle};
+use crate::widgets::{ConfirmDialog, FilteredList, Selector, TextInput, Toggle};
 
 /// Form mode for create vs edit
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -24,31 +24,34 @@ pub struct ModelForm {
     pub original_alias: Option<String>,
     pub focused_field: usize,
     pub alias: TextInput,
-    pub provider: TextInput,
+    pub provider: Selector,
     pub model: TextInput,
     pub set_as_default: Toggle,
 }
 
 impl ModelForm {
-    pub fn new_create() -> Self {
+    pub fn new_create(providers: Vec<String>) -> Self {
         Self {
             mode: FormMode::Create,
             original_alias: None,
             focused_field: 0,
             alias: TextInput::new().with_placeholder("e.g., fast, smart, claude"),
-            provider: TextInput::new().with_placeholder("e.g., anthropic, openai"),
+            provider: Selector::new(providers),
             model: TextInput::new().with_placeholder("e.g., claude-sonnet-4-20250514"),
             set_as_default: Toggle::new("Set as default model"),
         }
     }
 
-    pub fn new_edit(alias: &str, config: &ModelConfig, is_default: bool) -> Self {
+    pub fn new_edit(alias: &str, config: &ModelConfig, is_default: bool, providers: Vec<String>) -> Self {
+        let mut provider_selector = Selector::new(providers);
+        provider_selector.select_by_value(&config.provider);
+
         Self {
             mode: FormMode::Edit,
             original_alias: Some(alias.to_string()),
             focused_field: 0,
             alias: TextInput::new().with_value(alias),
-            provider: TextInput::new().with_value(&config.provider),
+            provider: provider_selector,
             model: TextInput::new().with_value(&config.model),
             set_as_default: Toggle::new("Set as default model").with_value(is_default),
         }
@@ -66,13 +69,17 @@ impl ModelForm {
         self.focused_field = self.focused_field.checked_sub(1).unwrap_or(Self::field_count() - 1);
     }
 
+    pub fn selected_provider(&self) -> Option<&str> {
+        self.provider.selected_value()
+    }
+
     pub fn validate(&self) -> Vec<String> {
         let mut errors = Vec::new();
         if self.alias.value.trim().is_empty() {
             errors.push("Alias is required".to_string());
         }
-        if self.provider.value.trim().is_empty() {
-            errors.push("Provider is required".to_string());
+        if self.provider.is_empty() {
+            errors.push("No providers configured".to_string());
         }
         if self.model.value.trim().is_empty() {
             errors.push("Model is required".to_string());
@@ -874,10 +881,16 @@ impl App {
 
     // Form handling
 
+    /// Get list of provider names from config
+    fn get_provider_names(&self) -> Vec<String> {
+        self.config.providers.keys().cloned().collect()
+    }
+
     fn start_create(&mut self) {
         match self.tab {
             Tab::Models => {
-                self.model_form = Some(ModelForm::new_create());
+                let providers = self.get_provider_names();
+                self.model_form = Some(ModelForm::new_create(providers));
                 self.view = View::Create;
                 self.input_mode = InputMode::Editing;
             }
@@ -901,7 +914,8 @@ impl App {
             Tab::Models => {
                 if let Some(model) = self.models.selected() {
                     let is_default = self.config.default_model == model.alias;
-                    self.model_form = Some(ModelForm::new_edit(&model.alias, &model.config, is_default));
+                    let providers = self.get_provider_names();
+                    self.model_form = Some(ModelForm::new_edit(&model.alias, &model.config, is_default, providers));
                     self.view = View::Edit;
                     self.input_mode = InputMode::Editing;
                 }
@@ -973,8 +987,9 @@ impl App {
         }
 
         let alias = form.alias.value.trim().to_string();
+        let provider = form.selected_provider().unwrap_or_default().to_string();
         let config = ModelConfig {
-            provider: form.provider.value.trim().to_string(),
+            provider,
             model: form.model.value.trim().to_string(),
             extra: std::collections::HashMap::new(),
         };

@@ -222,13 +222,35 @@ fn draw_model_form(f: &mut Frame, app: &App, area: Rect) {
         .placeholder(Some(&form.alias.placeholder));
     f.render_widget(alias_widget, chunks[0]);
 
-    // Provider field
-    let provider_widget = FormFieldWidget::new("Provider", &form.provider.value)
-        .focused(form.focused_field == 1)
-        .cursor(form.provider.cursor)
-        .required(true)
-        .placeholder(Some(&form.provider.placeholder));
-    f.render_widget(provider_widget, chunks[1]);
+    // Provider field (selector)
+    let provider_focused = form.focused_field == 1;
+    let provider_value = form.provider.selected_value().unwrap_or("(none)");
+    let provider_display = if form.provider.len() > 1 {
+        format!("◀ {} ▶", provider_value)
+    } else {
+        provider_value.to_string()
+    };
+
+    let provider_block = Block::default()
+        .borders(Borders::ALL)
+        .border_style(if provider_focused {
+            theme::highlight_style()
+        } else {
+            theme::border_style(false)
+        })
+        .title(Span::styled(
+            "Provider *",
+            if provider_focused { theme::highlight_style() } else { theme::dim_style() }
+        ));
+
+    let provider_text = Paragraph::new(Line::from(vec![
+        Span::styled(
+            provider_display,
+            if provider_focused { theme::highlight_style() } else { theme::normal_style() }
+        ),
+    ]))
+    .block(provider_block);
+    f.render_widget(provider_text, chunks[1]);
 
     // Model field
     let model_widget = FormFieldWidget::new("Model ID", &form.model.value)
