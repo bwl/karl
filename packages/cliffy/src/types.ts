@@ -86,6 +86,7 @@ export interface CliOptions {
   timeoutMs?: number;
   skill?: string;
   noTools?: boolean;
+  unrestricted?: boolean;
   context?: string;
   contextFile?: string;
   tasksFile?: string;

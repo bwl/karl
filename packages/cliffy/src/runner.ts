@@ -17,6 +17,7 @@ export interface RunTaskParams {
   hooks: HookRunner;
   toolsConfig: ToolsConfig;
   noTools?: boolean;
+  unrestricted?: boolean;
   timeoutMs?: number;
   onEvent?: (event: SchedulerEvent) => void;
 }
@@ -86,7 +87,8 @@ export async function runTask(params: RunTaskParams): Promise<TaskResult> {
       hooks: params.hooks,
       onEvent,
       task: params.task,
-      taskIndex: params.index
+      taskIndex: params.index,
+      unrestricted: params.unrestricted
     };
 
     let tools: any[] = [];

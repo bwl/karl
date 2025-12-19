@@ -28,6 +28,7 @@ Flags:
   --timeout            Per-task timeout (e.g. 30s, 5000ms)
   --skill              Load a skill by name
   --no-tools           Disable tool use
+  --unrestricted       Allow writes outside working directory
   --context            Extra system prompt text
   --context-file       Path to extra system prompt file
   --tasks-file         Path to a tasks file (one per line)
@@ -129,6 +130,9 @@ function parseArgs(argv: string[]): { options: CliOptions; tasks: (string | null
         break;
       case '--no-tools':
         options.noTools = true;
+        break;
+      case '--unrestricted':
+        options.unrestricted = true;
         break;
       case '--context':
         options.context = requireValue(flag, inlineValue ?? argv[++i]);
@@ -253,7 +257,8 @@ async function main() {
     cwd,
     skill: options.skill,
     context: options.context,
-    contextFile: options.contextFile
+    contextFile: options.contextFile,
+    unrestricted: options.unrestricted
   });
 
   const state = initState(finalTasks);
@@ -302,6 +307,7 @@ async function main() {
         hooks,
         toolsConfig: config.tools,
         noTools: options.noTools,
+        unrestricted: options.unrestricted,
         timeoutMs: options.timeoutMs,
         onEvent: (event) => {
           applyEvent(state, event);

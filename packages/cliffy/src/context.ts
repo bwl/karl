@@ -2,6 +2,13 @@ import path from 'path';
 import { readTextIfExists, resolveHomePath } from './utils.js';
 import { loadSkill } from './skills.js';
 
+const BASE_GUARDRAILS = `You are a helpful coding assistant. Follow these guidelines:
+
+- Only modify files within the current working directory unless explicitly asked otherwise
+- Before running destructive commands (rm, overwrite, etc.), confirm the intent
+- Prefer reading files before editing to understand context
+- Keep changes minimal and focused on the task at hand`;
+
 const CONTEXT_FILES = [
   'CLAUDE.md',
   'AGENTS.md',
@@ -27,8 +34,14 @@ export async function buildSystemPrompt(params: {
   skill?: string;
   context?: string;
   contextFile?: string;
+  unrestricted?: boolean;
 }): Promise<string> {
   const parts: string[] = [];
+
+  if (!params.unrestricted) {
+    parts.push(BASE_GUARDRAILS);
+  }
+
   const contextFiles = await loadContextFiles(params.cwd);
   parts.push(...contextFiles);
 

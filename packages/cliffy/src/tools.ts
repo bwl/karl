@@ -41,6 +41,18 @@ interface ToolContext {
   onEvent?: (event: SchedulerEvent) => void;
   task?: string;
   taskIndex?: number;
+  unrestricted?: boolean;
+}
+
+function assertWithinCwd(resolved: string, cwd: string, operation: string): void {
+  const normalizedResolved = path.resolve(resolved);
+  const normalizedCwd = path.resolve(cwd);
+  if (!normalizedResolved.startsWith(normalizedCwd + path.sep) && normalizedResolved !== normalizedCwd) {
+    throw new Error(
+      `${operation} outside working directory is not allowed: ${resolved}\n` +
+      `Use --unrestricted to bypass this check.`
+    );
+  }
 }
 
 function textResult<T>(text: string, details: T): AgentToolResult<T> {
@@ -341,6 +353,9 @@ export async function createBuiltinTools(ctx: ToolContext): Promise<AgentTool[]>
       'write',
       async (params) => {
         const resolved = path.isAbsolute(params.path) ? params.path : path.join(ctx.cwd, params.path);
+        if (!ctx.unrestricted) {
+          assertWithinCwd(resolved, ctx.cwd, 'Writing');
+        }
         await ensureDir(path.dirname(resolved));
         await Bun.write(resolved, params.content);
         const bytes = Buffer.byteLength(params.content);
@@ -359,6 +374,9 @@ export async function createBuiltinTools(ctx: ToolContext): Promise<AgentTool[]>
       'edit',
       async (params) => {
         const resolved = path.isAbsolute(params.path) ? params.path : path.join(ctx.cwd, params.path);
+        if (!ctx.unrestricted) {
+          assertWithinCwd(resolved, ctx.cwd, 'Editing');
+        }
         const content = await Bun.file(resolved).text();
 
         if (!content.includes(params.oldText)) {
