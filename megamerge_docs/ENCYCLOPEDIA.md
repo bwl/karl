@@ -2,7 +2,7 @@
 
 > A comprehensive collection of feature explorations, design ideas, and architectural visions for Karl - the AI agent CLI named after tennis legend Ivo Karlović.
 
-**Generated:** 2025-12-20 16:37:20
+**Generated:** 2025-12-20 12:29:46
 
 ---
 

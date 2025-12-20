@@ -5,7 +5,11 @@
 set -e
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-OUTPUT_FILE="${SCRIPT_DIR}/ENCYCLOPEDIA.md"
+SOURCE_DIR="${SCRIPT_DIR}/../ideas"
+OUTPUT_FILE="${SCRIPT_DIR}/../megamerge_docs/ENCYCLOPEDIA.md"
+
+# Ensure output directory exists
+mkdir -p "$(dirname "$OUTPUT_FILE")"
 
 # Header
 cat > "$OUTPUT_FILE" << 'EOF'
@@ -20,7 +24,7 @@ cat > "$OUTPUT_FILE" << 'EOF'
 EOF
 
 # Add timestamp
-sed -i "s/\$(date)/$(date '+%Y-%m-%d %H:%M:%S')/" "$OUTPUT_FILE"
+sed -i '' "s/\$(date)/$(date '+%Y-%m-%d %H:%M:%S')/" "$OUTPUT_FILE"
 
 echo "Building Karl Ideas Encyclopedia..."
 
@@ -29,7 +33,7 @@ echo "  Adding OVERVIEW.md..."
 echo "" >> "$OUTPUT_FILE"
 echo "---" >> "$OUTPUT_FILE"
 echo "" >> "$OUTPUT_FILE"
-cat "$SCRIPT_DIR/OVERVIEW.md" >> "$OUTPUT_FILE"
+cat "$SOURCE_DIR/OVERVIEW.md" >> "$OUTPUT_FILE"
 
 # Define the order of documents (grouped by category)
 DOCS=(
@@ -68,7 +72,7 @@ DOCS=(
 
 # Append each document with a separator
 for doc in "${DOCS[@]}"; do
-    if [[ -f "$SCRIPT_DIR/$doc" ]]; then
+    if [[ -f "$SOURCE_DIR/$doc" ]]; then
         echo "  Adding $doc..."
         echo "" >> "$OUTPUT_FILE"
         echo "" >> "$OUTPUT_FILE"
@@ -76,7 +80,7 @@ for doc in "${DOCS[@]}"; do
         echo "" >> "$OUTPUT_FILE"
         echo "<!-- BEGIN: $doc -->" >> "$OUTPUT_FILE"
         echo "" >> "$OUTPUT_FILE"
-        cat "$SCRIPT_DIR/$doc" >> "$OUTPUT_FILE"
+        cat "$SOURCE_DIR/$doc" >> "$OUTPUT_FILE"
         echo "" >> "$OUTPUT_FILE"
         echo "<!-- END: $doc -->" >> "$OUTPUT_FILE"
     else
