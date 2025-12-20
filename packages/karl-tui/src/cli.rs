@@ -11,6 +11,7 @@ use std::sync::mpsc;
 use std::thread;
 
 /// Info output from `karl info --json`
+#[allow(dead_code)]
 #[derive(Debug, Clone, Deserialize)]
 pub struct CliInfo {
     pub version: String,
@@ -21,6 +22,7 @@ pub struct CliInfo {
     pub counts: Counts,
 }
 
+#[allow(dead_code)]
 #[derive(Debug, Clone, Deserialize)]
 pub struct ConfigInfo {
     pub global_path: String,
@@ -29,6 +31,7 @@ pub struct ConfigInfo {
     pub project_exists: bool,
 }
 
+#[allow(dead_code)]
 #[derive(Debug, Clone, Deserialize)]
 pub struct AuthStatus {
     pub authenticated: bool,
@@ -37,12 +40,14 @@ pub struct AuthStatus {
     pub expires_at: Option<String>,
 }
 
+#[allow(dead_code)]
 #[derive(Debug, Clone, Deserialize)]
 pub struct ModelsInfo {
     pub default: String,
     pub configured: Vec<String>,
 }
 
+#[allow(dead_code)]
 #[derive(Debug, Clone, Deserialize)]
 pub struct ProviderStatus {
     #[serde(rename = "type")]

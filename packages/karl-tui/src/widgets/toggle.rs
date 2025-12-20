@@ -4,15 +4,11 @@ use crossterm::event::{KeyCode, KeyEvent};
 #[derive(Debug, Clone)]
 pub struct Toggle {
     pub value: bool,
-    pub label: String,
 }
 
 impl Toggle {
-    pub fn new(label: &str) -> Self {
-        Self {
-            value: false,
-            label: label.to_string(),
-        }
+    pub fn new() -> Self {
+        Self { value: false }
     }
 
     pub fn with_value(mut self, value: bool) -> Self {
@@ -33,18 +29,10 @@ impl Toggle {
             _ => false,
         }
     }
-
-    pub fn display(&self) -> &'static str {
-        if self.value {
-            "[x]"
-        } else {
-            "[ ]"
-        }
-    }
 }
 
 impl Default for Toggle {
     fn default() -> Self {
-        Self::new("")
+        Self::new()
     }
 }

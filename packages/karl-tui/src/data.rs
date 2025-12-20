@@ -129,8 +129,6 @@ pub struct StackConfig {
 pub struct SkillInfo {
     pub name: String,
     pub description: String,
-    pub license: Option<String>,
-    pub path: PathBuf,
 }
 
 /// Hook information
@@ -138,7 +136,6 @@ pub struct SkillInfo {
 pub struct HookInfo {
     pub name: String,
     pub hook_type: String,
-    pub path: PathBuf,
 }
 
 /// Load config from a path
@@ -268,7 +265,6 @@ fn parse_skill_file(skill_file: &Path, skill_dir: &Path) -> Result<SkillInfo> {
     // Parse YAML frontmatter
     let mut name = String::new();
     let mut description = String::new();
-    let mut license = None;
 
     if content.starts_with("---") {
         if let Some(end) = content[3..].find("---") {
@@ -279,8 +275,6 @@ fn parse_skill_file(skill_file: &Path, skill_dir: &Path) -> Result<SkillInfo> {
                     name = val.trim().trim_matches('"').to_string();
                 } else if let Some(val) = line.strip_prefix("description:") {
                     description = val.trim().trim_matches('"').to_string();
-                } else if let Some(val) = line.strip_prefix("license:") {
-                    license = Some(val.trim().trim_matches('"').to_string());
                 }
             }
         }
@@ -295,12 +289,7 @@ fn parse_skill_file(skill_file: &Path, skill_dir: &Path) -> Result<SkillInfo> {
             .to_string();
     }
 
-    Ok(SkillInfo {
-        name,
-        description,
-        license,
-        path: skill_dir.to_path_buf(),
-    })
+    Ok(SkillInfo { name, description })
 }
 
 /// Discover stacks from all sources
@@ -406,7 +395,6 @@ pub fn discover_hooks() -> Vec<HookInfo> {
                     hooks.push(HookInfo {
                         name,
                         hook_type: hook_type.to_string(),
-                        path: path.to_path_buf(),
                     });
                 }
             }

@@ -15,13 +15,6 @@ impl Selector {
         }
     }
 
-    pub fn with_selected(mut self, index: usize) -> Self {
-        if index < self.options.len() {
-            self.selected = index;
-        }
-        self
-    }
-
     pub fn select_by_value(&mut self, value: &str) {
         if let Some(idx) = self.options.iter().position(|o| o == value) {
             self.selected = idx;

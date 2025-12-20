@@ -10,12 +10,6 @@ pub const BORDER: Color = Color::DarkGray;
 // Status colors
 pub const SUCCESS: Color = Color::Green;
 pub const WARNING: Color = Color::Yellow;
-pub const ERROR: Color = Color::Red;
-pub const INFO: Color = Color::Blue;
-
-// Tab colors
-pub const TAB_ACTIVE: Color = Color::Cyan;
-pub const TAB_INACTIVE: Color = Color::DarkGray;
 
 // List colors
 pub const LIST_SELECTED_BG: Color = Color::DarkGray;
@@ -49,34 +43,8 @@ pub fn success_style() -> Style {
     Style::default().fg(SUCCESS)
 }
 
-pub fn error_style() -> Style {
-    Style::default().fg(ERROR)
-}
-
 pub fn warning_style() -> Style {
     Style::default().fg(WARNING)
-}
-
-pub fn info_style() -> Style {
-    Style::default().fg(INFO)
-}
-
-pub fn tab_style(active: bool) -> Style {
-    if active {
-        Style::default()
-            .fg(TAB_ACTIVE)
-            .add_modifier(Modifier::BOLD)
-    } else {
-        Style::default().fg(TAB_INACTIVE)
-    }
-}
-
-pub fn key_hint_style() -> Style {
-    Style::default().fg(Color::DarkGray)
-}
-
-pub fn key_style() -> Style {
-    Style::default().fg(ACCENT).add_modifier(Modifier::BOLD)
 }
 
 pub fn border_style(focused: bool) -> Style {

@@ -111,12 +111,4 @@ impl<T> FilteredList<T> {
     pub fn len(&self) -> usize {
         self.filtered_indices.len()
     }
-
-    pub fn is_empty(&self) -> bool {
-        self.filtered_indices.is_empty()
-    }
-
-    pub fn total_len(&self) -> usize {
-        self.items.len()
-    }
 }

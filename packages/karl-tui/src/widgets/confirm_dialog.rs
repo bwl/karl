@@ -18,12 +18,6 @@ impl ConfirmDialog {
         }
     }
 
-    pub fn with_labels(mut self, confirm: &str, cancel: &str) -> Self {
-        self.confirm_label = confirm.to_string();
-        self.cancel_label = cancel.to_string();
-        self
-    }
-
     pub fn toggle(&mut self) {
         self.selected = !self.selected;
     }

@@ -100,10 +100,6 @@ impl TextInput {
         self.value.clear();
         self.cursor = 0;
     }
-
-    pub fn is_empty(&self) -> bool {
-        self.value.is_empty()
-    }
 }
 
 impl Default for TextInput {

@@ -1,38 +1,12 @@
 use ratatui::{
     buffer::Buffer,
     layout::Rect,
-    style::{Color, Modifier, Style},
+    style::{Color, Style},
     text::{Line, Span},
-    widgets::{Block, Borders, Paragraph, Widget},
+    widgets::Widget,
 };
 
 use crate::theme;
-
-/// Validation result for a form field
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum ValidationResult {
-    Valid,
-    Invalid(String),
-}
-
-impl ValidationResult {
-    pub fn is_valid(&self) -> bool {
-        matches!(self, ValidationResult::Valid)
-    }
-
-    pub fn error_message(&self) -> Option<&str> {
-        match self {
-            ValidationResult::Invalid(msg) => Some(msg),
-            ValidationResult::Valid => None,
-        }
-    }
-}
-
-impl Default for ValidationResult {
-    fn default() -> Self {
-        ValidationResult::Valid
-    }
-}
 
 /// A rendered form field with label, input area, and optional error
 pub struct FormFieldWidget<'a> {
@@ -75,31 +49,9 @@ impl<'a> FormFieldWidget<'a> {
         self
     }
 
-    pub fn error(mut self, error: Option<&'a str>) -> Self {
-        self.error = error;
-        self
-    }
-
-    pub fn hint(mut self, hint: Option<&'a str>) -> Self {
-        self.hint = hint;
-        self
-    }
-
     pub fn placeholder(mut self, placeholder: Option<&'a str>) -> Self {
         self.placeholder = placeholder;
         self
-    }
-
-    /// Calculate the height needed to render this field
-    pub fn height(&self) -> u16 {
-        let mut h = 3; // Label + input box
-        if self.error.is_some() {
-            h += 1;
-        }
-        if self.hint.is_some() && self.focused {
-            h += 1;
-        }
-        h
     }
 }
 
@@ -198,68 +150,6 @@ impl Widget for FormFieldWidget<'_> {
                 }
             }
         }
-    }
-}
-
-/// Render a selector field
-pub struct SelectorFieldWidget<'a> {
-    pub label: &'a str,
-    pub options: &'a [String],
-    pub selected: usize,
-    pub focused: bool,
-}
-
-impl<'a> SelectorFieldWidget<'a> {
-    pub fn new(label: &'a str, options: &'a [String], selected: usize) -> Self {
-        Self {
-            label,
-            options,
-            selected,
-            focused: false,
-        }
-    }
-
-    pub fn focused(mut self, focused: bool) -> Self {
-        self.focused = focused;
-        self
-    }
-}
-
-impl Widget for SelectorFieldWidget<'_> {
-    fn render(self, area: Rect, buf: &mut Buffer) {
-        if area.height < 2 {
-            return;
-        }
-
-        let mut y = area.y;
-
-        // Render label
-        let label_style = if self.focused {
-            theme::highlight_style()
-        } else {
-            theme::normal_style()
-        };
-        buf.set_line(area.x, y, &Line::from(Span::styled(self.label, label_style)), area.width);
-        y += 1;
-
-        // Render options inline
-        let mut spans = vec![Span::raw("  ")];
-        for (i, opt) in self.options.iter().enumerate() {
-            let is_selected = i == self.selected;
-            let style = if is_selected {
-                Style::default()
-                    .fg(theme::ACCENT)
-                    .add_modifier(Modifier::BOLD)
-            } else {
-                Style::default().fg(theme::MUTED)
-            };
-            let prefix = if is_selected { "● " } else { "○ " };
-            spans.push(Span::styled(format!("{}{}", prefix, opt), style));
-            if i < self.options.len() - 1 {
-                spans.push(Span::raw("  "));
-            }
-        }
-        buf.set_line(area.x, y, &Line::from(spans), area.width);
     }
 }
 

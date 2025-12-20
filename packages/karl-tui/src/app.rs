@@ -41,7 +41,7 @@ impl ModelForm {
             alias: TextInput::new().with_placeholder("e.g., fast, smart, claude"),
             provider: Selector::new(providers),
             model: Selector::new(models),
-            set_as_default: Toggle::new("Set as default model"),
+            set_as_default: Toggle::new(),
         }
     }
 
@@ -60,7 +60,7 @@ impl ModelForm {
             alias: TextInput::new().with_value(alias),
             provider: provider_selector,
             model: model_selector,
-            set_as_default: Toggle::new("Set as default model").with_value(is_default),
+            set_as_default: Toggle::new().with_value(is_default),
         }
     }
 
@@ -138,7 +138,7 @@ impl StackForm {
             skill: TextInput::new().with_placeholder("Skill name (optional)"),
             context,
             context_file: TextInput::new().with_placeholder("Path to context file (optional)"),
-            unrestricted: Toggle::new("Unrestricted mode"),
+            unrestricted: Toggle::new(),
         }
     }
 
@@ -167,7 +167,7 @@ impl StackForm {
             skill: TextInput::new().with_value(config.skill.as_deref().unwrap_or("")),
             context,
             context_file: TextInput::new().with_value(config.context_file.as_deref().unwrap_or("")),
-            unrestricted: Toggle::new("Unrestricted mode").with_value(config.unrestricted.unwrap_or(false)),
+            unrestricted: Toggle::new().with_value(config.unrestricted.unwrap_or(false)),
         }
     }
 
@@ -244,28 +244,6 @@ pub enum Section {
 }
 
 impl Section {
-    pub fn all() -> &'static [Section] {
-        &[
-            Section::Settings,
-            Section::Models,
-            Section::Stacks,
-            Section::Skills,
-            Section::Tools,
-            Section::Hooks,
-        ]
-    }
-
-    pub fn name(&self) -> &'static str {
-        match self {
-            Section::Settings => "Settings",
-            Section::Models => "Models",
-            Section::Stacks => "Stacks",
-            Section::Skills => "Skills",
-            Section::Tools => "Tools",
-            Section::Hooks => "Hooks",
-        }
-    }
-
     pub fn next(self) -> Self {
         match self {
             Section::Settings => Section::Models,
@@ -311,7 +289,6 @@ pub enum View {
     Detail,
     Edit,
     Create,
-    Confirm,
 }
 
 /// Input mode
@@ -353,9 +330,6 @@ pub struct App {
     pub input_mode: InputMode,
     pub should_quit: bool,
     pub status_message: Option<String>,
-
-    // Scroll position for the page
-    pub scroll_offset: u16,
 
     // Config
     pub config: KarlConfig,
@@ -588,7 +562,6 @@ impl App {
             input_mode: InputMode::Normal,
             should_quit: false,
             status_message: None,
-            scroll_offset: 0,
             config,
             config_path,
             dirty: false,
