@@ -1,6 +1,6 @@
 # Agent Skills Implementation Summary
 
-This document summarizes the complete Agent Skills implementation for Cliffy, following the [Agent Skills open standard](https://agentskills.io).
+This document summarizes the complete Agent Skills implementation for Karl, following the [Agent Skills open standard](https://agentskills.io).
 
 ## Implementation Overview
 
@@ -16,24 +16,24 @@ This document summarizes the complete Agent Skills implementation for Cliffy, fo
 ## Files Added/Modified
 
 ### Core Implementation
-- `packages/cliffy/src/skills.ts` - Main Agent Skills engine
-- `packages/cliffy/src/commands/skills.ts` - CLI commands for skills management
-- `packages/cliffy/src/cli.ts` - Updated to handle skills commands and --skill flag
-- `packages/cliffy/src/context.ts` - Already had loadSkill integration
+- `packages/karl/src/skills.ts` - Main Agent Skills engine
+- `packages/karl/src/commands/skills.ts` - CLI commands for skills management
+- `packages/karl/src/cli.ts` - Updated to handle skills commands and --skill flag
+- `packages/karl/src/context.ts` - Already had loadSkill integration
 
 ### Example Skills
-- `packages/cliffy/examples/skills/security-review/` - Comprehensive security analysis skill
-- `packages/cliffy/examples/skills/code-review/` - Code quality assessment skill  
-- `packages/cliffy/examples/skills/documentation/` - Technical documentation creation skill
+- `packages/karl/examples/skills/security-review/` - Comprehensive security analysis skill
+- `packages/karl/examples/skills/code-review/` - Code quality assessment skill  
+- `packages/karl/examples/skills/documentation/` - Technical documentation creation skill
 
 ### Documentation
-- `packages/cliffy/AGENT_SKILLS.md` - Complete usage documentation
+- `packages/karl/AGENT_SKILLS.md` - Complete usage documentation
 - `AGENT_SKILLS_IMPLEMENTATION.md` - This implementation summary
 - `README.md` - Updated with Agent Skills support information
 
 ### Testing
-- `packages/cliffy/scripts/test-skills.ts` - Comprehensive test suite
-- `packages/cliffy/package.json` - Added test-skills script
+- `packages/karl/scripts/test-skills.ts` - Comprehensive test suite
+- `packages/karl/package.json` - Added test-skills script
 
 ## Features Implemented
 
@@ -41,35 +41,35 @@ This document summarizes the complete Agent Skills implementation for Cliffy, fo
 
 ```bash
 # List all available skills
-cliffy skills list
-cliffy skills list --verbose
+karl skills list
+karl skills list --verbose
 
 # Show detailed skill information  
-cliffy skills show <skill-name>
+karl skills show <skill-name>
 
 # Create new skill from template
-cliffy skills create <name> --description "..." --path /path
+karl skills create <name> --description "..." --path /path
 
 # Validate skill compliance
-cliffy skills validate <path>
+karl skills validate <path>
 ```
 
 ### 2. Skill Usage
 
 ```bash
 # Use a skill for any task
-cliffy --skill <skill-name> "your task description"
+karl --skill <skill-name> "your task description"
 
-# Works with all Cliffy features
-cliffy --skill security-review --verbose "analyze auth system"
-cliffy --skill code-review --max-concurrent 3 "review all .go files"
+# Works with all Karl features
+karl --skill security-review --verbose "analyze auth system"
+karl --skill code-review --max-concurrent 3 "review all .go files"
 ```
 
 ### 3. Skill Discovery
 
 Automatic skill discovery from standard locations:
-- `~/.config/cliffy/skills/` (global)
-- `./.cliffy/skills/` (project-specific)
+- `~/.config/karl/skills/` (global)
+- `./.karl/skills/` (project-specific)
 - Custom paths via SkillManager constructor
 
 ### 4. Standard Compliance
@@ -95,13 +95,13 @@ Automatic skill discovery from standard locations:
 ### 5. Integration Features
 
 #### System Prompt Integration
-- Skills automatically integrate with Cliffy's context system
+- Skills automatically integrate with Karl's context system
 - Skills combine with project context files (CLAUDE.md, .cursorrules, etc.)
 - Skills work with custom context flags (--context, --context-file)
 
 #### Tool Integration  
 - ✅ `allowed-tools` field parsing and validation
-- ✅ Works with all Cliffy tools (read, write, edit, bash)
+- ✅ Works with all Karl tools (read, write, edit, bash)
 - ✅ Custom tool compatibility
 
 #### Error Handling
@@ -138,7 +138,7 @@ Automatic skill discovery from standard locations:
 - Thread-safe and efficient with built-in caching
 
 ### CLI Integration
-- Seamless integration with existing Cliffy architecture
+- Seamless integration with existing Karl architecture
 - Maintains backward compatibility
 - Extends help system with skills commands
 - Error handling and user feedback
@@ -165,32 +165,32 @@ Run tests with: `bun run test-skills`
 ### Basic Usage
 ```bash
 # Use security skill
-cliffy --skill security-review "analyze this Flask app for vulnerabilities"
+karl --skill security-review "analyze this Flask app for vulnerabilities"
 
 # Use documentation skill
-cliffy --skill documentation "create API documentation for the user endpoints"
+karl --skill documentation "create API documentation for the user endpoints"
 
 # Use code review skill
-cliffy --skill code-review "review the authentication logic in auth.py"
+karl --skill code-review "review the authentication logic in auth.py"
 ```
 
 ### Skill Management
 ```bash
 # List available skills
-cliffy skills list
+karl skills list
 
 # Create custom skill
-cliffy skills create api-testing --description "Automated API testing and validation"
+karl skills create api-testing --description "Automated API testing and validation"
 
 # Validate a skill
-cliffy skills validate ~/.config/cliffy/skills/my-skill
+karl skills validate ~/.config/karl/skills/my-skill
 ```
 
 ### Project Integration
 ```bash
 # Project-specific skill
-mkdir -p .cliffy/skills/deploy
-cat > .cliffy/skills/deploy/SKILL.md << 'EOF'
+mkdir -p .karl/skills/deploy
+cat > .karl/skills/deploy/SKILL.md << 'EOF'
 ---
 name: deploy
 description: Handle deployment tasks for this specific project
@@ -202,7 +202,7 @@ You are an expert in deploying this specific application...
 EOF
 
 # Use project skill
-cliffy --skill deploy "deploy to staging environment"
+karl --skill deploy "deploy to staging environment"
 ```
 
 ## Future Enhancements
@@ -233,7 +233,7 @@ The implementation is designed to be:
 
 ## Summary
 
-Cliffy now provides comprehensive Agent Skills support, making it fully compatible with the growing Agent Skills ecosystem. Users can:
+Karl now provides comprehensive Agent Skills support, making it fully compatible with the growing Agent Skills ecosystem. Users can:
 
 1. **Use existing skills** from the Agent Skills community
 2. **Create custom skills** for their specific workflows
@@ -241,4 +241,4 @@ Cliffy now provides comprehensive Agent Skills support, making it fully compatib
 4. **Version control expertise** alongside their code
 5. **Build reusable capabilities** that improve over time
 
-The implementation maintains Cliffy's core philosophy of speed, simplicity, and Unix-native operation while extending capabilities through the Agent Skills standard.
+The implementation maintains Karl's core philosophy of speed, simplicity, and Unix-native operation while extending capabilities through the Agent Skills standard.

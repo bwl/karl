@@ -1,11 +1,11 @@
 {
-  "name": "cliffy",
+  "name": "karl",
   "private": true,
   "packageManager": "bun@1.1.0",
   "workspaces": ["packages/*"],
   "scripts": {
-    "dev": "bun run packages/cliffy/src/cli.ts",
-    "build": "bun build packages/cliffy/src/cli.ts --compile --outfile packages/cliffy/dist/cliffy",
-    "typecheck": "tsc -p packages/cliffy/tsconfig.json --noEmit"
+    "dev": "bun run packages/karl/src/cli.ts",
+    "build": "bun build packages/karl/src/cli.ts --compile --outfile packages/karl/dist/karl",
+    "typecheck": "tsc -p packages/karl/tsconfig.json --noEmit"
   }
 }

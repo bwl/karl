@@ -1,0 +1,22 @@
+{
+  "name": "karl-cli",
+  "version": "0.1.0",
+  "type": "module",
+  "bin": {
+    "karl": "./dist/karl"
+  },
+  "scripts": {
+    "test-skills": "bun run scripts/test-skills.ts",
+    "build": "bun build src/cli.ts --target bun --outfile dist/karl"
+  },
+  "dependencies": {
+    "@mariozechner/pi-ai": "^0.23.4",
+    "@mariozechner/pi-agent-core": "^0.23.4",
+    "@mariozechner/pi-tui": "^0.23.4",
+    "@sinclair/typebox": "^0.34.0"
+  },
+  "devDependencies": {
+    "bun-types": "latest",
+    "typescript": "^5.5.0"
+  }
+}

@@ -1,0 +1,20 @@
+[package]
+name = "karl-tui"
+version = "0.1.0"
+edition = "2021"
+description = "Configuration TUI for Karl AI agent CLI"
+license = "Apache-2.0"
+
+[[bin]]
+name = "karl-tui"
+path = "src/main.rs"
+
+[dependencies]
+ratatui = "0.29"
+crossterm = "0.28"
+tui-textarea = "0.7"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+dirs = "5"
+walkdir = "2"
+anyhow = "1"

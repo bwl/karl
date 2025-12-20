@@ -1,11 +1,11 @@
-# Cliffy
+# Karl
 
 **The fastest way to get LLM intelligence into your terminal.**
 
 ![Agent Skills](https://img.shields.io/badge/Agent%20Skills-Supported-brightgreen) ![Status](https://img.shields.io/badge/Status-Active-brightgreen)
 
 ```
-$ cliffy "how much energy from the sun reaches Earth each day?"
+$ karl "how much energy from the sun reaches Earth each day?"
 
 Breakdown:
   - Solar constant: ~1361 W/m² at the top of Earth's atmosphere.
@@ -18,29 +18,43 @@ Breakdown:
 
 ---
 
-## What is Cliffy?
+## What is Karl?
 
-Cliffy is a headless LLM assistant that lives in your terminal. It brings AI knowledge and action directly into your filesystem and standard I/O streams.
+Karl is a headless LLM assistant that lives in your terminal. It brings AI knowledge and action directly into your filesystem and standard I/O streams.
 
-**Core philosophy:**
-- **One-shot** — Configure, serve, ace. No follow-up, no continuation.
+**Core philosophy:** *Serve-and-volley, not baseline rallies.*
+
+- **One-shot** — Serve, ace, done. No follow-up, no continuation.
 - **Fast** — Sub-second startup. No database. No sessions. Just ask.
 - **Unix-native** — Plays nice with pipes, stdin, stdout, stderr
-- **Parallel** — Send multiple tasks, get results back efficiently
+- **Parallel** — Send multiple tasks, volley them back efficiently
 - **Minimal** — Four tools. No bloat. Extend via plugins.
 
 ---
 
 ## The Name
 
-Cliffy is a **CLI** tool. The name also evokes tennis — volleying tasks back and forth.
+Named after **[Ivo Karlović](https://en.wikipedia.org/wiki/Ivo_Karlovi%C4%87)** — the 6'11" Croatian giant who holds the all-time ATP record for aces.
+
+| Stat | Value |
+|------|-------|
+| Height | 6'11" (211 cm) |
+| Career Aces | **13,728** (ATP record) |
+| Aces in a Match | 78 (Davis Cup record) |
+| Service Speed | 156 mph (251 km/h) |
+| Career Span | 2000–2020 |
+
+> *"I don't have a second serve. I have a first serve and a slower first serve."*
+> — Ivo Karlović
+
+Like Karlović's unreturnable serves, Karl delivers fast, one-shot responses. No rallies. No follow-ups. Just **aces**.
 
 ```
-   ◍═══════════════════════════╕
-   │  CLIFFY                   │
-   │  ᕕ( ᐛ )ᕗ                  │
-   │  LLM volleys for your CLI │
-   ╰═══════════════════════════╛
+   ╭───────────────────────────────────╮
+   │  KARL                             │
+   │  🎾 13,728 aces and counting      │
+   │  LLM volleys for your CLI         │
+   ╰───────────────────────────────────╯
 ```
 
 ---
@@ -49,41 +63,43 @@ Cliffy is a **CLI** tool. The name also evokes tennis — volleying tasks back a
 
 ### Direct queries
 ```bash
-cliffy "explain the CAP theorem in one paragraph"
-cliffy "what's the mass of Jupiter in kilograms?"
+karl "explain the CAP theorem in one paragraph"
+karl "what's the mass of Jupiter in kilograms?"
 ```
 
 ### Working with code
 ```bash
-cliffy "find all TODO comments in this project"
-cliffy "review auth.go for security issues"
-cliffy "commit the feature we just finished"
+karl "find all TODO comments in this project"
+karl "review auth.go for security issues"
+karl "commit the feature we just finished"
 ```
 
 ### Volley Mode (parallel)
 ```bash
-cliffy "analyze auth.go" "analyze db.go" "analyze api.go"
-cliffy "make 20 mobs for the NPC system. look at the 5 we built for inspo"
+karl "analyze auth.go" "analyze db.go" "analyze api.go"
+karl "make 20 mobs for the NPC system. look at the 5 we built for inspo"
 ```
 
 ### Pipeline integration
 ```bash
-cat error.log | cliffy "what went wrong here?"
-cliffy "list all exported functions" | grep -i auth
-git diff | cliffy "write a commit message for this"
+cat error.log | karl "what went wrong here?"
+karl "list all exported functions" | grep -i auth
+git diff | karl "write a commit message for this"
 ```
 
 ---
 
 ## The Ace Model
 
-Cliffy uses a **TUI while working, clean print on exit** pattern.
+*Serve and done.* Like Karlović on the court — no baseline rallies, no long exchanges. Just an unreturnable first serve.
+
+Karl uses a **TUI while working, clean print on exit** pattern.
 
 **During execution** — A live TUI shows progress:
 
 ```
 ┌─────────────────────────────────────┐
-│  ◍ cliffy                           │
+│  ◍ karl                           │
 │                                     │
 │  analyzing auth.go...               │
 │  ├───▣ read   auth.go (245 lines)   │
@@ -97,7 +113,7 @@ Cliffy uses a **TUI while working, clean print on exit** pattern.
 **On completion** — TUI clears, result prints to stdout:
 
 ```
-$ cliffy "analyze auth.go for security issues"
+$ karl "analyze auth.go for security issues"
 
 Found 2 issues in auth.go:
 
@@ -123,27 +139,27 @@ The work is done. The ace landed. Clean text you can scroll, copy, pipe, grep.
 
 ## Architecture
 
-Inspired by [pi-mono](https://github.com/badlogic/pi-mono), Cliffy uses a layered monorepo:
+Inspired by [pi-mono](https://github.com/badlogic/pi-mono), Karl uses a layered monorepo:
 
 ```
-cliffy/
+karl/
 ├── packages/
-│   ├── cliffy-providers/   # LLM provider abstraction
-│   ├── cliffy-core/        # Agent loop, tool execution
-│   ├── cliffy-tools/       # Built-in tool implementations
-│   └── cliffy-cli/         # CLI interface, volley scheduler
+│   ├── karl-providers/   # LLM provider abstraction
+│   ├── karl-core/        # Agent loop, tool execution
+│   ├── karl-tools/       # Built-in tool implementations
+│   └── karl-cli/         # CLI interface, volley scheduler
 └── plugins/                # Example custom tools
 ```
 
 ### Why This Structure?
 
-1. **`cliffy-providers`** — Clean abstraction over OpenAI, Anthropic, OpenRouter, Ollama, vLLM. Swap providers without touching agent code.
+1. **`karl-providers`** — Clean abstraction over OpenAI, Anthropic, OpenRouter, Ollama, vLLM. Swap providers without touching agent code.
 
-2. **`cliffy-core`** — The agent loop: parse response → execute tools → feed result → repeat. No UI concerns.
+2. **`karl-core`** — The agent loop: parse response → execute tools → feed result → repeat. No UI concerns.
 
-3. **`cliffy-tools`** — Default tools as a separate package. Users can replace entirely or extend.
+3. **`karl-tools`** — Default tools as a separate package. Users can replace entirely or extend.
 
-4. **`cliffy-cli`** — The user-facing binary. Volley scheduler, progress display, config loading.
+4. **`karl-cli`** — The user-facing binary. Volley scheduler, progress display, config loading.
 
 **Lockstep versioning**: All packages share the same version. Bump together, publish together.
 
@@ -172,11 +188,11 @@ Following pi's philosophy: minimal toolset, maximum capability.
 
 ## Custom Tools (Plugins)
 
-Extend Cliffy without forking. Drop a file in `~/.config/cliffy/tools/`:
+Extend Karl without forking. Drop a file in `~/.config/karl/tools/`:
 
 ```typescript
-// ~/.config/cliffy/tools/jira.ts
-import { defineTool } from 'cliffy-core';
+// ~/.config/karl/tools/jira.ts
+import { defineTool } from 'karl-core';
 
 export default defineTool({
   name: 'jira',
@@ -203,30 +219,30 @@ Tools are loaded at startup. No recompilation needed.
 
 ## Agent Skills Support 🎯
 
-Cliffy fully supports the [Agent Skills](https://agentskills.io) open standard for extending AI capabilities with specialized knowledge and workflows.
+Karl fully supports the [Agent Skills](https://agentskills.io) open standard for extending AI capabilities with specialized knowledge and workflows.
 
 ### Using Skills
 
 ```bash
-cliffy --skill security-review "analyze this codebase for vulnerabilities"
-cliffy --skill code-review "review the changes in auth.go"
-cliffy --skill documentation "create API docs for the user service"
+karl --skill security-review "analyze this codebase for vulnerabilities"
+karl --skill code-review "review the changes in auth.go"
+karl --skill documentation "create API docs for the user service"
 ```
 
 ### Managing Skills
 
 ```bash
 # List available skills
-cliffy skills list
+karl skills list
 
 # Show skill details
-cliffy skills show security-review
+karl skills show security-review
 
 # Create a new skill
-cliffy skills create my-workflow --description "Custom analysis workflow"
+karl skills create my-workflow --description "Custom analysis workflow"
 
 # Validate a skill
-cliffy skills validate ./path/to/skill
+karl skills validate ./path/to/skill
 ```
 
 ### Built-in Skills
@@ -237,10 +253,10 @@ cliffy skills validate ./path/to/skill
 
 ### Skill Locations
 
-- `~/.config/cliffy/skills/` - Global skills
-- `./.cliffy/skills/` - Project-specific skills
+- `~/.config/karl/skills/` - Global skills
+- `./.karl/skills/` - Project-specific skills
 
-Skills use the standard Agent Skills format with YAML frontmatter and are fully portable across Agent Skills-compatible tools. See [AGENT_SKILLS.md](packages/cliffy/AGENT_SKILLS.md) for complete documentation.
+Skills use the standard Agent Skills format with YAML frontmatter and are fully portable across Agent Skills-compatible tools. See [AGENT_SKILLS.md](packages/karl/AGENT_SKILLS.md) for complete documentation.
 
 ---
 
@@ -257,7 +273,7 @@ Run custom logic at key points:
 | `on-error` | When a task fails |
 
 ```typescript
-// ~/.config/cliffy/hooks/audit.ts
+// ~/.config/karl/hooks/audit.ts
 export default {
   'post-tool': async (event) => {
     if (event.tool === 'bash') {
@@ -280,14 +296,14 @@ Use cases:
 Multiple balls in the air. The TUI shines here.
 
 ```bash
-cliffy "analyze auth.go" "analyze db.go" "analyze api.go" "analyze main.go"
+karl "analyze auth.go" "analyze db.go" "analyze api.go" "analyze main.go"
 ```
 
 ### The TUI During a Volley
 
 ```
 ┌──────────────────────────────────────────────────────────────┐
-│  ◍ cliffy volley                            4 tasks │ ─────  │
+│  ◍ karl volley                            4 tasks │ ─────  │
 ├──────────────────────────────────────────────────────────────┤
 │                                                              │
 │  1 │ ◍ analyze auth.go                                       │
@@ -319,7 +335,7 @@ Each task row shows:
 TUI clears. Results print in order:
 
 ```
-$ cliffy "analyze auth.go" "analyze db.go" "analyze api.go" "analyze main.go"
+$ karl "analyze auth.go" "analyze db.go" "analyze api.go" "analyze main.go"
 
 ━━━ 1/4: analyze auth.go ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
@@ -369,10 +385,10 @@ The TUI adapts to task count:
 
 ```bash
 # Crank up concurrency for independent tasks
-cliffy --max-concurrent 10 "task1" "task2" ... "task10"
+karl --max-concurrent 10 "task1" "task2" ... "task10"
 
 # Conservative for rate-limited APIs
-cliffy --max-concurrent 2 "task1" "task2" "task3"
+karl --max-concurrent 2 "task1" "task2" "task3"
 ```
 
 ---
@@ -382,22 +398,22 @@ cliffy --max-concurrent 2 "task1" "task2" "task3"
 Automatic project context from:
 - `CLAUDE.md`, `AGENTS.md`, `COPILOT.md`
 - `.cursorrules`, `.github/copilot-instructions.md`
-- `.cliffy/context.md` (project-specific)
+- `.karl/context.md` (project-specific)
 
 Explicit context:
 ```bash
-cliffy --context "You are a security expert" "review this"
-cliffy --context-file system-prompt.txt "analyze the architecture"
+karl --context "You are a security expert" "review this"
+karl --context-file system-prompt.txt "analyze the architecture"
 ```
 
-**No session state.** Each invocation is fresh. For multi-turn work, use a full coding agent (pi, Claude Code) and delegate to Cliffy for side tasks.
+**No session state.** Each invocation is fresh. For multi-turn work, use a full coding agent (pi, Claude Code) and delegate to Karl for side tasks.
 
 ---
 
 ## Command Line Interface
 
 ```
-cliffy [flags] <task> [task...]
+karl [flags] <task> [task...]
 ```
 
 ### Model Selection
@@ -440,14 +456,14 @@ cliffy [flags] <task> [task...]
 ### File Locations
 
 ```
-~/.config/cliffy/
-├── cliffy.json      # Main config
+~/.config/karl/
+├── karl.json      # Main config
 ├── tools/           # Custom tools
 ├── skills/          # Skill definitions
 └── hooks/           # Hook scripts
 ```
 
-Project-level `.cliffy.json` overrides global config.
+Project-level `.karl.json` overrides global config.
 
 ### Config Schema
 
@@ -477,7 +493,7 @@ Project-level `.cliffy.json` overrides global config.
   },
   "tools": {
     "enabled": ["bash", "read", "write", "edit"],
-    "custom": ["~/.config/cliffy/tools/*.ts"]
+    "custom": ["~/.config/karl/tools/*.ts"]
   },
   "volley": {
     "maxConcurrent": 3,
@@ -575,27 +591,27 @@ Backoff: 1s → 2s → 4s → 8s (max 60s)
 
 ### Shell alias
 ```bash
-alias c='cliffy'
-alias cq='cliffy --quiet'
-alias cs='cliffy --smart'
+alias c='karl'
+alias cq='karl --quiet'
+alias cs='karl --smart'
 ```
 
 ### Delegation from coding agents
 ```bash
 # While Claude Code handles the main feature...
-cliffy "update the changelog"
-cliffy "check for flaky tests"
-cliffy "summarize open issues"
+karl "update the changelog"
+karl "check for flaky tests"
+karl "summarize open issues"
 ```
 
 ### CI/CD
 ```bash
-cliffy --json --quiet "analyze diff for security" > report.json
+karl --json --quiet "analyze diff for security" > report.json
 ```
 
 ### Batch processing
 ```bash
-cliffy --tasks-file review-checklist.txt --max-concurrent 5
+karl --tasks-file review-checklist.txt --max-concurrent 5
 ```
 
 ---
@@ -628,17 +644,17 @@ The ephemeral TUI needs to:
 2. Use differential rendering (only redraw what changed — no flicker)
 3. Exit cleanly and print result to main buffer
 
-Could use pi-tui directly, or build a minimal version for Cliffy's specific needs (progress + tool tree + spinner).
+Could use pi-tui directly, or build a minimal version for Karl's specific needs (progress + tool tree + spinner).
 
 ---
 
-## What Cliffy Is Not
+## What Karl Is Not
 
 - **Not a coding agent** — No sessions, no memory, no multi-turn
 - **Not a chat interface** — No REPL, no conversation
 - **Not a framework** — It's a tool, not a library
 
-For multi-turn work: use pi, Claude Code, or aider. Delegate parallel/batch tasks to Cliffy.
+For multi-turn work: use pi, Claude Code, or aider. Delegate parallel/batch tasks to Karl.
 
 ---
 

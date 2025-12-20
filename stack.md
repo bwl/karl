@@ -1,12 +1,12 @@
-# Cliffy Stack
+# Karl Stack
 
-How to build Cliffy using the [pi-mono](https://github.com/badlogic/pi-mono) packages.
+How to build Karl using the [pi-mono](https://github.com/badlogic/pi-mono) packages.
 
 ## The Pi Packages We'd Use
 
 ```
 ┌─────────────────────────────────────────────────────────┐
-│                     cliffy-cli                          │
+│                     karl-cli                          │
 │              (volley scheduler, ace UX)                 │
 ├─────────────────────────────────────────────────────────┤
 │     pi-tui          │         pi-agent                  │
@@ -17,7 +17,7 @@ How to build Cliffy using the [pi-mono](https://github.com/badlogic/pi-mono) pac
 └─────────────────────────────────────────────────────────┘
 ```
 
-| Package | What Cliffy Uses It For |
+| Package | What Karl Uses It For |
 |---------|-------------------------|
 | `@mariozechner/pi-ai` | Provider abstraction, streaming, tool schemas |
 | `@mariozechner/pi-agent` | Agent loop, tool execution, message handling |
@@ -131,7 +131,7 @@ function TaskRow({ task, status, tools }) {
 
 function VolleyUI({ tasks }) {
   return Box({ border: 'single' }, [
-    Text('◍ cliffy volley'),
+    Text('◍ karl volley'),
     ...tasks.map(t => TaskRow(t)),
     ProgressBar({ value: completedCount / totalCount })
   ]);
@@ -173,7 +173,7 @@ async function runWithTUI(task) {
 }
 ```
 
-## Cliffy-Specific Code
+## Karl-Specific Code
 
 What we build that's NOT in pi:
 
@@ -280,7 +280,7 @@ function handleAgentEvent(state: VolleyState, taskIndex: number, event: AgentEve
 The Ace landing:
 
 ```typescript
-async function cliffy(tasks: string[], options: Options) {
+async function karl(tasks: string[], options: Options) {
   const screen = new Screen({ altBuffer: true });
   const state = initState(tasks);
   
@@ -319,8 +319,8 @@ async function cliffy(tasks: string[], options: Options) {
 ```typescript
 async function loadSkill(name: string): Promise<string> {
   const paths = [
-    `.cliffy/skills/${name}.md`,
-    `~/.config/cliffy/skills/${name}.md`,
+    `.karl/skills/${name}.md`,
+    `~/.config/karl/skills/${name}.md`,
   ];
   
   for (const path of paths) {
@@ -343,9 +343,9 @@ const systemPrompt = [
 ## Package Structure
 
 ```
-cliffy/
+karl/
 ├── packages/
-│   └── cliffy/
+│   └── karl/
 │       ├── src/
 │       │   ├── cli.ts           # Entry point, arg parsing
 │       │   ├── scheduler.ts     # Volley scheduler
@@ -386,7 +386,7 @@ Single package for now. Split later if needed.
 bun run src/cli.ts "test task"
 
 # Build binary
-bun build src/cli.ts --compile --outfile dist/cliffy
+bun build src/cli.ts --compile --outfile dist/karl
 
 # The binary is self-contained, no node_modules needed
 ```
@@ -405,7 +405,7 @@ bun build src/cli.ts --compile --outfile dist/cliffy
 
 1. **Fork pi-tui or depend on it?** 
    - Depend: less code to maintain, benefit from updates
-   - Fork: can slim down, customize for Cliffy's specific needs
+   - Fork: can slim down, customize for Karl's specific needs
 
 2. **How much of pi-agent to use?**
    - Full agent: get tool loop for free

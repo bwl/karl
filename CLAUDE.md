@@ -1,4 +1,4 @@
-# Cliffy
+# Karl
 
 AI agent CLI with Agent Skills and Config Stacks.
 
@@ -10,20 +10,20 @@ Named configurations bundling model, temperature, timeout, token limits, and ski
 
 ```bash
 # Run with a config stack
-cliffy as trivia-expert "circumference of earth in miles"
-cliffy as codex52-architect "review spec and create implementation plan"
+karl as trivia-expert "circumference of earth in miles"
+karl as codex52-architect "review spec and create implementation plan"
 
 # List available stacks
-cliffy stacks list
+karl stacks list
 
 # Create a new stack
-cliffy stacks create my-stack --model smart --skill code-review
+karl stacks create my-stack --model smart --skill code-review
 ```
 
 ### Stack Locations
-- Global: `~/.config/cliffy/stacks/<name>.json`
-- Project: `./.cliffy/stacks/<name>.json`
-- Inline: `cliffy.json` → `{ "stacks": { ... } }`
+- Global: `~/.config/karl/stacks/<name>.json`
+- Project: `./.karl/stacks/<name>.json`
+- Inline: `karl.json` → `{ "stacks": { ... } }`
 
 ### Stack Schema
 ```json
@@ -41,23 +41,23 @@ cliffy stacks create my-stack --model smart --skill code-review
 
 ## Agent Skills
 
-Cliffy supports the [Agent Skills](https://agentskills.io) open standard.
+Karl supports the [Agent Skills](https://agentskills.io) open standard.
 
 ### Using Skills
 
 ```bash
 # List available skills
-cliffy skills list
+karl skills list
 
 # Use a skill
-cliffy --skill security-review "analyze this codebase"
-cliffy --skill code-review "review auth.go"
-cliffy --skill documentation "document the API"
+karl --skill security-review "analyze this codebase"
+karl --skill code-review "review auth.go"
+karl --skill documentation "document the API"
 ```
 
 ### Skill Locations
-- Global: `~/.config/cliffy/skills/`
-- Project: `./.cliffy/skills/`
+- Global: `~/.config/karl/skills/`
+- Project: `./.karl/skills/`
 
 ### Built-in Example Skills
 - `security-review` - Security vulnerability analysis
