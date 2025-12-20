@@ -12,7 +12,6 @@
   "dependencies": {
     "@mariozechner/pi-ai": "^0.23.4",
     "@mariozechner/pi-agent-core": "^0.23.4",
-    "@mariozechner/pi-tui": "^0.23.4",
     "@sinclair/typebox": "^0.34.0"
   },
   "devDependencies": {

@@ -91,9 +91,6 @@ export interface KarlConfig {
 
 export interface CliOptions {
   model?: string;
-  fast?: boolean;
-  smart?: boolean;
-  tui?: boolean;
   verbose?: boolean;
   json?: boolean;
   stats?: boolean;
