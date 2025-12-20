@@ -8,6 +8,42 @@ import { writeFileSync, mkdirSync, existsSync } from 'fs';
 import { join } from 'path';
 import { homedir } from 'os';
 
+/**
+ * Parse duration string (e.g., "10s", "5m", "1h") to milliseconds
+ */
+function parseDuration(input: string): number {
+  const match = input.match(/^(\d+)(ms|s|m|h)?$/);
+  if (!match) {
+    console.error(`Invalid duration: "${input}". Use format like "10s", "5m", "1h", or "30000" (ms)`);
+    process.exit(1);
+  }
+
+  const value = parseInt(match[1], 10);
+  const unit = match[2] || 'ms';
+
+  switch (unit) {
+    case 'ms': return value;
+    case 's': return value * 1000;
+    case 'm': return value * 60 * 1000;
+    case 'h': return value * 60 * 60 * 1000;
+    default: return value;
+  }
+}
+
+/**
+ * Format milliseconds as human-readable duration
+ */
+function formatDuration(ms: number): string {
+  if (ms >= 60 * 60 * 1000) {
+    return `${ms / (60 * 60 * 1000)}h`;
+  } else if (ms >= 60 * 1000) {
+    return `${ms / (60 * 1000)}m`;
+  } else if (ms >= 1000) {
+    return `${ms / 1000}s`;
+  }
+  return `${ms}ms`;
+}
+
 export interface StacksListOptions {
   verbose?: boolean;
 }
@@ -79,7 +115,7 @@ export async function showStack(name: string) {
   }
 
   if (stack.timeout !== undefined) {
-    console.log(`**Timeout:** ${stack.timeout}ms`);
+    console.log(`**Timeout:** ${formatDuration(stack.timeout)}`);
   }
 
   if (stack.maxTokens !== undefined) {
@@ -106,10 +142,19 @@ export async function showStack(name: string) {
   console.log(`  karl ${name} "your task"`);
 }
 
+export interface CreateStackOptions {
+  model?: string;
+  skill?: string;
+  extends?: string;
+  global?: boolean;
+  timeout?: number;
+  context?: string;
+}
+
 /**
  * Create a new stack
  */
-export async function createStack(name: string, options: { model?: string; skill?: string; extends?: string; global?: boolean } = {}) {
+export async function createStack(name: string, options: CreateStackOptions = {}) {
   // Determine path
   let stacksDir: string;
   if (options.global) {
@@ -143,6 +188,14 @@ export async function createStack(name: string, options: { model?: string; skill
 
   if (options.skill) {
     stack.skill = options.skill;
+  }
+
+  if (options.timeout) {
+    stack.timeout = options.timeout;
+  }
+
+  if (options.context) {
+    stack.context = options.context;
   }
 
   writeFileSync(stackPath, JSON.stringify(stack, null, 2) + '\n');
@@ -238,23 +291,27 @@ export async function handleStacksCommand(args: string[]) {
       break;
 
     case 'create':
-    case 'new':
+    case 'new': {
       if (rest.length === 0) {
-        console.error('Usage: karl stacks create <stack-name> [--model <model>] [--skill <skill>] [--extends <parent>] [--global]');
+        console.error('Usage: karl stacks create <name> [--model <model>] [--skill <skill>] [--timeout <duration>] [--global]');
         process.exit(1);
       }
 
       const name = rest[0];
-      const createOptions: { model?: string; skill?: string; extends?: string; global?: boolean } = {};
+      const createOptions: CreateStackOptions = {};
 
       // Parse flags
       for (let i = 1; i < rest.length; i++) {
-        if (rest[i] === '--model' && rest[i + 1]) {
+        if ((rest[i] === '--model' || rest[i] === '-m') && rest[i + 1]) {
           createOptions.model = rest[++i];
-        } else if (rest[i] === '--skill' && rest[i + 1]) {
+        } else if ((rest[i] === '--skill' || rest[i] === '-s') && rest[i + 1]) {
           createOptions.skill = rest[++i];
         } else if (rest[i] === '--extends' && rest[i + 1]) {
           createOptions.extends = rest[++i];
+        } else if ((rest[i] === '--timeout' || rest[i] === '-t') && rest[i + 1]) {
+          createOptions.timeout = parseDuration(rest[++i]);
+        } else if ((rest[i] === '--context' || rest[i] === '-c') && rest[i + 1]) {
+          createOptions.context = rest[++i];
         } else if (rest[i] === '--global' || rest[i] === '-g') {
           createOptions.global = true;
         }
@@ -262,6 +319,7 @@ export async function handleStacksCommand(args: string[]) {
 
       await createStack(name, createOptions);
       break;
+    }
 
     case 'remove':
     case 'rm':

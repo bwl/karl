@@ -9,11 +9,44 @@ import { join, basename } from 'path';
 import { homedir } from 'os';
 import { createInterface } from 'readline';
 import { loadConfig } from '../config.js';
-import { ModelConfig, ProviderConfig } from '../types.js';
-import { loadProvidersFromDir, providerExists } from './providers.js';
+import { ModelConfig } from '../types.js';
 
 const GLOBAL_CONFIG_PATH = join(homedir(), '.config', 'karl', 'karl.json');
 const MODELS_DIR = join(homedir(), '.config', 'karl', 'models');
+
+/**
+ * Fetch model metadata from OpenRouter API
+ */
+async function fetchOpenRouterModelInfo(modelId: string): Promise<Partial<ModelConfig> | null> {
+  try {
+    const response = await fetch('https://openrouter.ai/api/v1/models');
+    if (!response.ok) return null;
+
+    const data = await response.json() as { data: Array<{
+      id: string;
+      name: string;
+      description?: string;
+      context_length?: number;
+      top_provider?: { max_completion_tokens?: number };
+      pricing?: { prompt: string; completion: string };
+    }> };
+
+    const model = data.data.find(m => m.id === modelId);
+    if (!model) return null;
+
+    return {
+      maxTokens: model.top_provider?.max_completion_tokens,
+      contextLength: model.context_length,
+      description: model.description,
+      pricing: model.pricing ? {
+        prompt: parseFloat(model.pricing.prompt) * 1_000_000,
+        completion: parseFloat(model.pricing.completion) * 1_000_000,
+      } : undefined,
+    };
+  } catch {
+    return null;
+  }
+}
 
 /**
  * Ensure models directory exists
@@ -190,119 +223,173 @@ const PROVIDER_MODELS: Record<string, string[]> = {
   ],
 };
 
+export interface AddModelOptions {
+  alias: string;
+  provider?: string;
+  model?: string;
+  setDefault?: boolean;
+}
+
 /**
- * Interactive wizard to add a model
+ * Add a model (interactive or non-interactive)
  */
-export async function addModel(alias?: string) {
+export async function addModel(options: AddModelOptions) {
+  const cwd = process.cwd();
+  const config = await loadConfig(cwd);
+
+  const { alias } = options;
+  let { provider: providerKey, model: modelId } = options;
+
+  // Check if alias already exists
+  if (config.models?.[alias]) {
+    console.error(`Model "${alias}" already exists. Remove it first with: karl models remove ${alias}`);
+    process.exit(1);
+  }
+
+  const providers = config.providers ?? {};
+  const providerNames = Object.keys(providers);
+
+  if (providerNames.length === 0) {
+    console.error('No providers configured.');
+    console.error('');
+    console.error('Add a provider first with: karl providers add');
+    process.exit(1);
+  }
+
+  // Non-interactive mode: require both provider and model
+  if (providerKey && modelId) {
+    if (!providers[providerKey]) {
+      console.error(`Provider "${providerKey}" not found.`);
+      console.error(`Available: ${providerNames.join(', ')}`);
+      process.exit(1);
+    }
+
+    // Fetch metadata for OpenRouter models
+    let metadata: Partial<ModelConfig> = {};
+    if (providerKey === 'openrouter') {
+      console.log('Fetching model metadata from OpenRouter...');
+      const info = await fetchOpenRouterModelInfo(modelId);
+      if (info) {
+        metadata = info;
+      }
+    }
+
+    saveModel(alias, { provider: providerKey, model: modelId, ...metadata });
+
+    if (options.setDefault) {
+      const globalConfig = readGlobalConfig();
+      globalConfig.defaultModel = alias;
+      writeGlobalConfig(globalConfig);
+    }
+
+    console.log(`✓ Model "${alias}" added.`);
+    console.log(`  ${providerKey}/${modelId}`);
+    if (metadata.maxTokens) {
+      console.log(`  Max tokens: ${metadata.maxTokens}`);
+    }
+    if (metadata.contextLength) {
+      console.log(`  Context: ${metadata.contextLength}`);
+    }
+    return;
+  }
+
+  // Interactive mode
   const rl = createInterface({
     input: process.stdin,
     output: process.stdout,
   });
 
   try {
-    // Get alias if not provided
-    if (!alias) {
-      alias = await prompt(rl, 'Model alias (e.g., fast, smart, haiku): ');
-      if (!alias) {
-        console.error('Alias is required.');
-        rl.close();
-        return;
-      }
-    }
-
-    // Check if alias already exists
-    if (modelExists(alias)) {
-      console.log(`Model "${alias}" already exists. Remove it first with: karl models remove ${alias}`);
-      rl.close();
-      return;
-    }
-
-    // Get available providers
-    const providers = loadProvidersFromDir();
-    const providerNames = Object.keys(providers);
-
-    if (providerNames.length === 0) {
-      console.log('No providers configured.');
+    // Get provider if not provided
+    if (!providerKey) {
+      console.log('\nAvailable providers:');
+      providerNames.forEach((name, i) => {
+        const provider = providers[name];
+        const authType = provider.authType === 'oauth' ? 'OAuth' : 'API Key';
+        console.log(`  ${i + 1}. ${name} (${authType})`);
+      });
       console.log('');
-      console.log('Add a provider first with: karl providers add');
-      rl.close();
-      return;
-    }
 
-    console.log('\nAvailable providers:');
-    providerNames.forEach((name, i) => {
-      const provider = providers[name];
-      const authType = provider.authType === 'oauth' ? 'OAuth' : 'API Key';
-      console.log(`  ${i + 1}. ${name} (${authType})`);
-    });
-    console.log('');
+      const providerInput = await prompt(rl, 'Provider [1]: ') || '1';
+      const providerIndex = parseInt(providerInput, 10);
 
-    const providerInput = await prompt(rl, 'Provider [1]: ') || '1';
-    const providerIndex = parseInt(providerInput, 10);
-
-    let providerKey: string;
-    if (providerIndex >= 1 && providerIndex <= providerNames.length) {
-      providerKey = providerNames[providerIndex - 1];
-    } else {
-      providerKey = providerInput;
+      if (providerIndex >= 1 && providerIndex <= providerNames.length) {
+        providerKey = providerNames[providerIndex - 1];
+      } else {
+        providerKey = providerInput;
+      }
     }
 
     if (!providers[providerKey]) {
       console.error(`Provider "${providerKey}" not found.`);
       rl.close();
-      return;
+      process.exit(1);
     }
 
-    // Show common models for this provider
-    const commonModels = PROVIDER_MODELS[providerKey] || [];
-    let modelId: string;
+    // Get model if not provided
+    if (!modelId) {
+      const commonModels = PROVIDER_MODELS[providerKey] || [];
 
-    if (commonModels.length > 0) {
-      console.log(`\nCommon ${providerKey} models:`);
-      commonModels.forEach((m, i) => {
-        console.log(`  ${i + 1}. ${m}`);
-      });
-      console.log(`  Or enter a custom model ID`);
-      console.log('');
+      if (commonModels.length > 0) {
+        console.log(`\nCommon ${providerKey} models:`);
+        commonModels.forEach((m, i) => {
+          console.log(`  ${i + 1}. ${m}`);
+        });
+        console.log(`  Or enter a custom model ID`);
+        console.log('');
 
-      const modelInput = await prompt(rl, 'Model [1]: ') || '1';
-      const modelIndex = parseInt(modelInput, 10);
+        const modelInput = await prompt(rl, 'Model [1]: ') || '1';
+        const modelIndex = parseInt(modelInput, 10);
 
-      if (modelIndex >= 1 && modelIndex <= commonModels.length) {
-        modelId = commonModels[modelIndex - 1];
+        if (modelIndex >= 1 && modelIndex <= commonModels.length) {
+          modelId = commonModels[modelIndex - 1];
+        } else {
+          modelId = modelInput;
+        }
       } else {
-        modelId = modelInput;
-      }
-    } else {
-      modelId = await prompt(rl, 'Model ID: ');
-      if (!modelId) {
-        console.error('Model ID is required.');
-        rl.close();
-        return;
+        modelId = await prompt(rl, 'Model ID: ');
+        if (!modelId) {
+          console.error('Model ID is required.');
+          rl.close();
+          process.exit(1);
+        }
       }
     }
 
     rl.close();
 
-    // Save model to file
-    saveModel(alias, {
-      provider: providerKey,
-      model: modelId,
-    });
+    // Fetch metadata for OpenRouter models
+    let metadata: Partial<ModelConfig> = {};
+    if (providerKey === 'openrouter') {
+      console.log('\nFetching model metadata from OpenRouter...');
+      const info = await fetchOpenRouterModelInfo(modelId);
+      if (info) {
+        metadata = info;
+      }
+    }
 
-    // Set as default if it's the first model
+    saveModel(alias, { provider: providerKey, model: modelId, ...metadata });
+
+    // Set as default if first model or requested
     const models = loadModelsFromDir();
-    if (Object.keys(models).length === 1) {
+    if (Object.keys(models).length === 1 || options.setDefault) {
       const globalConfig = readGlobalConfig();
       globalConfig.defaultModel = alias;
       writeGlobalConfig(globalConfig);
-      console.log(`\nSetting "${alias}" as the default model.`);
+      if (Object.keys(models).length === 1) {
+        console.log(`\nSetting "${alias}" as the default model.`);
+      }
     }
 
     console.log(`\n✓ Model "${alias}" added.`);
     console.log(`  Provider: ${providerKey}`);
     console.log(`  Model: ${modelId}`);
-    console.log(`  Path: ${MODELS_DIR}/${alias}.json`);
+    if (metadata.maxTokens) {
+      console.log(`  Max tokens: ${metadata.maxTokens}`);
+    }
+    if (metadata.contextLength) {
+      console.log(`  Context: ${metadata.contextLength}`);
+    }
 
   } catch (error) {
     rl.close();
@@ -363,6 +450,44 @@ export async function setDefaultModel(alias: string) {
 }
 
 /**
+ * Refresh model metadata from OpenRouter API
+ */
+export async function refreshModels() {
+  const cwd = process.cwd();
+  const config = await loadConfig(cwd);
+  const models = config.models ?? {};
+
+  const openRouterModels = Object.entries(models).filter(
+    ([_, m]) => m.provider === 'openrouter'
+  );
+
+  if (openRouterModels.length === 0) {
+    console.log('No OpenRouter models to refresh.');
+    return;
+  }
+
+  console.log(`Fetching metadata for ${openRouterModels.length} OpenRouter model(s)...\n`);
+
+  let updated = 0;
+  for (const [alias, modelConfig] of openRouterModels) {
+    const info = await fetchOpenRouterModelInfo(modelConfig.model);
+    if (info) {
+      const updatedConfig: ModelConfig = {
+        ...modelConfig,
+        ...info,
+      };
+      saveModel(alias, updatedConfig);
+      console.log(`✓ ${alias}: ${info.maxTokens ?? '?'} max tokens, ${info.contextLength ?? '?'} context`);
+      updated++;
+    } else {
+      console.log(`✗ ${alias}: not found in OpenRouter API`);
+    }
+  }
+
+  console.log(`\nUpdated ${updated}/${openRouterModels.length} models.`);
+}
+
+/**
  * Handle models subcommands
  */
 export async function handleModelsCommand(args: string[]) {
@@ -385,9 +510,39 @@ export async function handleModelsCommand(args: string[]) {
 
     case 'add':
     case 'new':
-    case 'create':
-      await addModel(rest[0]);
+    case 'create': {
+      if (rest.length === 0) {
+        console.error('Usage: karl models add <alias> [--provider <name>] [--model <id>]');
+        console.error('       karl models add <alias> <provider>/<model>');
+        process.exit(1);
+      }
+
+      const alias = rest[0];
+      let provider: string | undefined;
+      let model: string | undefined;
+      let setDefault = false;
+
+      // Check for shorthand: alias provider/model
+      if (rest[1] && rest[1].includes('/') && !rest[1].startsWith('--')) {
+        const parts = rest[1].split('/');
+        provider = parts[0];
+        model = parts.slice(1).join('/');  // Handle models like openai/gpt-4o or org/model:tag
+      } else {
+        // Parse flags
+        for (let i = 1; i < rest.length; i++) {
+          if ((rest[i] === '--provider' || rest[i] === '-p') && rest[i + 1]) {
+            provider = rest[++i];
+          } else if ((rest[i] === '--model' || rest[i] === '-m') && rest[i + 1]) {
+            model = rest[++i];
+          } else if (rest[i] === '--default' || rest[i] === '-d') {
+            setDefault = true;
+          }
+        }
+      }
+
+      await addModel({ alias, provider, model, setDefault });
       break;
+    }
 
     case 'remove':
     case 'rm':
@@ -408,6 +563,11 @@ export async function handleModelsCommand(args: string[]) {
       await setDefaultModel(rest[0]);
       break;
 
+    case 'refresh':
+    case 'update':
+      await refreshModels();
+      break;
+
     default:
       if (!command) {
         console.error('Usage: karl models <command>');
@@ -418,9 +578,10 @@ export async function handleModelsCommand(args: string[]) {
         console.error('  add [alias]       Add a new model');
         console.error('  remove <alias>    Remove a model');
         console.error('  default <alias>   Set the default model');
+        console.error('  refresh           Update OpenRouter model metadata');
       } else {
         console.error(`Unknown models command: ${command}`);
-        console.error('Available commands: list, show, add, remove, default');
+        console.error('Available commands: list, show, add, remove, default, refresh');
       }
       process.exit(1);
   }

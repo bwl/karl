@@ -76,6 +76,8 @@ export interface ResolvedModel {
   providerKey: string;
   providerConfig: ProviderConfig;
   modelKey: string;
+  maxTokens?: number;
+  contextLength?: number;
 }
 
 export function resolveModel(config: KarlConfig, options: CliOptions): ResolvedModel {
@@ -97,7 +99,9 @@ export function resolveModel(config: KarlConfig, options: CliOptions): ResolvedM
         model: options.model,
         providerKey: fallbackModel.provider,
         providerConfig,
-        modelKey
+        modelKey,
+        maxTokens: fallbackModel.maxTokens,
+        contextLength: fallbackModel.contextLength,
       };
     }
   }
@@ -115,7 +119,9 @@ export function resolveModel(config: KarlConfig, options: CliOptions): ResolvedM
     model: modelConfig.model,
     providerKey: modelConfig.provider,
     providerConfig,
-    modelKey
+    modelKey,
+    maxTokens: modelConfig.maxTokens,
+    contextLength: modelConfig.contextLength,
   };
 }
 

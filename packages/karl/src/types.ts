@@ -46,6 +46,14 @@ export interface TaskResult {
 export interface ModelConfig {
   provider: string;
   model: string;
+  // Optional metadata (auto-fetched for OpenRouter)
+  maxTokens?: number;
+  contextLength?: number;
+  description?: string;
+  pricing?: {
+    prompt: number;    // per million tokens
+    completion: number;
+  };
 }
 
 export interface ProviderConfig {
@@ -106,6 +114,7 @@ export interface CliOptions {
   temperature?: number;       // Temperature override
   maxTokens?: number;         // Max tokens override
   dryRun?: boolean;           // Show config without running
+  volley?: boolean;           // Enable multi-task mode
 }
 
 export interface SchedulerOptions {

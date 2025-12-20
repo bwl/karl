@@ -14,6 +14,7 @@ import {
   runLoginFlow
 } from '../oauth.js';
 import { ProviderConfig } from '../types.js';
+import { loadConfig } from '../config.js';
 
 const PROVIDERS_DIR = join(homedir(), '.config', 'karl', 'providers');
 const MODELS_DIR = join(homedir(), '.config', 'karl', 'models');
@@ -196,8 +197,9 @@ function getProviderStatus(providerKey: string, providerConfig: ProviderConfig):
  * List all configured providers
  */
 export async function listProviders() {
-  const providers = loadProvidersFromDir();
-  const entries = Object.entries(providers);
+  const cwd = process.cwd();
+  const config = await loadConfig(cwd);
+  const entries = Object.entries(config.providers ?? {});
 
   if (entries.length === 0) {
     console.log('No providers configured.');
@@ -226,8 +228,9 @@ export async function listProviders() {
  * Show details of a specific provider
  */
 export async function showProvider(providerKey: string) {
-  const providers = loadProvidersFromDir();
-  const providerConfig = providers[providerKey];
+  const cwd = process.cwd();
+  const config = await loadConfig(cwd);
+  const providerConfig = config.providers?.[providerKey];
 
   if (!providerConfig) {
     console.error(`Provider "${providerKey}" not found.`);
@@ -240,7 +243,6 @@ export async function showProvider(providerKey: string) {
   console.log(`**Type:** ${providerConfig.type}`);
   console.log(`**Auth Method:** ${status.authMethod}`);
   console.log(`**Status:** ${status.authenticated ? 'Authenticated ✓' : 'Not authenticated'}`);
-  console.log(`**Path:** ${PROVIDERS_DIR}/${providerKey}.json`);
 
   if (providerConfig.baseUrl) {
     console.log(`**Base URL:** ${providerConfig.baseUrl}`);
@@ -395,7 +397,9 @@ export async function removeProvider(providerKey: string) {
  * Login to an OAuth provider
  */
 export async function loginProvider(providerKey?: string) {
-  const providers = loadProvidersFromDir();
+  const cwd = process.cwd();
+  const config = await loadConfig(cwd);
+  const providers = config.providers ?? {};
 
   // Find OAuth providers
   const oauthProviders = Object.entries(providers)

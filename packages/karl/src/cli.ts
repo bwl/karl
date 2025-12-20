@@ -223,11 +223,11 @@ async function printHelp(): Promise<void> {
     // Ignore errors loading stacks for help
   }
 
-  const help = `karl run <task> [task...]
+  const help = `karl run <task>
 karl <command> <task>       (stack as verb)
 
 Built-in Commands:
-  run <task>                Run task using 'default' stack
+  run <task>                Run a single task
   init                      First-time setup wizard
   providers                 Manage providers (add, login, logout)
   models                    Manage models (add, remove, list)
@@ -248,7 +248,8 @@ Flags (use with 'run'):
   --context            Extra system prompt text
   --context-file       Path to extra system prompt file
   --tasks-file         Path to a tasks file (one per line)
-  -                    Read a task from stdin
+  --volley             Enable multi-task mode (task1 task2 ...)
+  -                    Read task from stdin
   --dry-run            Show config without running
   --help, -h           Show help
   --version            Show version
@@ -387,6 +388,9 @@ function parseArgs(argv: string[]): { options: CliOptions; tasks: (string | null
       case '--dry-run':
         options.dryRun = true;
         break;
+      case '--volley':
+        options.volley = true;
+        break;
       case '--stack':
         options.stack = requireValue(flag, inlineValue ?? argv[++i]);
         break;
@@ -406,6 +410,15 @@ function parseArgs(argv: string[]): { options: CliOptions; tasks: (string | null
         tasks.push(arg);
         break;
     }
+  }
+
+  // Validate: multiple positional args require --volley or --tasks-file
+  if (tasks.length > 1 && !options.volley && !options.tasksFile) {
+    throw new Error(
+      `Multiple tasks require --volley flag.\n` +
+      `  Got: ${tasks.map(t => `"${t}"`).join(' ')}\n` +
+      `  Use: karl run --volley "task1" "task2" ...`
+    );
   }
 
   return { options, tasks, wantsHelp, wantsVersion, wantsLogin, wantsLogout };
@@ -718,12 +731,15 @@ async function main() {
         model: resolvedModel.model,
         providerKey: resolvedModel.providerKey,
         apiKey,
+        baseUrl: resolvedModel.providerConfig?.baseUrl,
         systemPrompt,
         hooks,
         toolsConfig: config.tools,
         noTools: effectiveOptions.noTools,
         unrestricted: effectiveOptions.unrestricted,
         timeoutMs: effectiveOptions.timeoutMs,
+        maxTokens: effectiveOptions.maxTokens ?? resolvedModel.maxTokens,
+        contextLength: resolvedModel.contextLength,
         onEvent: (event) => {
           applyEvent(state, event);
           if (event.type === 'thinking') {

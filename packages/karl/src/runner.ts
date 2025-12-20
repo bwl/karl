@@ -25,12 +25,15 @@ export interface RunTaskParams {
   model: string;
   providerKey: string;
   apiKey: string;
+  baseUrl?: string;
   systemPrompt: string;
   hooks: HookRunner;
   toolsConfig: ToolsConfig;
   noTools?: boolean;
   unrestricted?: boolean;
   timeoutMs?: number;
+  maxTokens?: number;
+  contextLength?: number;
   onEvent?: (event: SchedulerEvent) => void;
 }
 
@@ -120,7 +123,22 @@ export async function runTask(params: RunTaskParams): Promise<TaskResult> {
     setApiKey(piAiProvider as any, params.apiKey);
 
     // Get model config from pi-ai
-    const model = getModel(piAiProvider as any, params.model);
+    // For custom models not in pi-ai registry, use config metadata or sensible defaults
+    const baseModel = getModel(piAiProvider as any, params.model);
+
+    // Determine API format based on provider
+    // pi-ai expects: "anthropic-messages", "openai-completions", "openai-responses", "google-generative-ai"
+    const apiFormat = (piAiProvider === 'anthropic') ? 'anthropic-messages' : 'openai-completions';
+
+    const model = {
+      ...baseModel,
+      id: baseModel?.id ?? params.model,
+      provider: baseModel?.provider ?? piAiProvider,
+      api: baseModel?.api ?? apiFormat,
+      baseUrl: baseModel?.baseUrl ?? params.baseUrl,
+      maxTokens: baseModel?.maxTokens || params.maxTokens || 8192,
+      contextLength: baseModel?.contextLength || params.contextLength || 128000,
+    };
 
     // Build context
     const context = {

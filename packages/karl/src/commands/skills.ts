@@ -5,6 +5,7 @@
 import { skillManager, SkillManager } from '../skills.js';
 import { writeFileSync, mkdirSync } from 'fs';
 import { join } from 'path';
+import { homedir } from 'os';
 
 export interface SkillsListOptions {
   verbose?: boolean;
@@ -18,6 +19,8 @@ export interface SkillsCreateOptions {
   name: string;
   description: string;
   path?: string;
+  global?: boolean;
+  project?: boolean;
 }
 
 /**
@@ -113,8 +116,22 @@ export async function validateSkill(options: SkillsValidateOptions) {
  * Create a new skill template
  */
 export async function createSkill(options: SkillsCreateOptions) {
-  const skillPath = options.path || join(process.cwd(), options.name);
-  
+  // Determine skill path
+  let skillPath: string;
+  if (options.path) {
+    skillPath = options.path;
+  } else if (options.global) {
+    skillPath = join(homedir(), '.config', 'karl', 'skills', options.name);
+  } else if (options.project) {
+    skillPath = join(process.cwd(), '.karl', 'skills', options.name);
+  } else {
+    console.error('Must specify --global or --project (or --path for custom location)');
+    console.error('');
+    console.error('  --global   Create in ~/.config/karl/skills/');
+    console.error('  --project  Create in ./.karl/skills/');
+    process.exit(1);
+  }
+
   try {
     // Create skill directory
     mkdirSync(skillPath, { recursive: true });
@@ -352,13 +369,15 @@ export async function handleSkillsCommand(args: string[]) {
     case 'create':
     case 'new':
       if (rest.length === 0) {
-        console.error('Usage: karl skills create <skill-name> [--description "..."] [--path /path/to/skill]');
+        console.error('Usage: karl skills create <name> --global|--project [--description "..."]');
         process.exit(1);
       }
-      
+
       const name = rest[0];
       let description = `${name.replace(/-/g, ' ')} skill`;
       let path = undefined;
+      let global = false;
+      let project = false;
 
       // Parse flags
       for (let i = 1; i < rest.length; i++) {
@@ -366,10 +385,14 @@ export async function handleSkillsCommand(args: string[]) {
           description = rest[++i];
         } else if (rest[i] === '--path' && rest[i + 1]) {
           path = rest[++i];
+        } else if (rest[i] === '--global' || rest[i] === '-g') {
+          global = true;
+        } else if (rest[i] === '--project' || rest[i] === '-p') {
+          project = true;
         }
       }
 
-      await createSkill({ name, description, path });
+      await createSkill({ name, description, path, global, project });
       break;
 
     case 'validate':
