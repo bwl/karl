@@ -337,7 +337,8 @@ export async function loadSkill(skillName: string, cwd: string): Promise<string 
     
     return manager.generateSystemPrompt(skill);
   } catch (error) {
-    console.warn(`Failed to load skill "${skillName}":`, error.message);
+    const message = error instanceof Error ? error.message : String(error);
+    console.warn(`Failed to load skill "${skillName}":`, message);
     return null;
   }
 }

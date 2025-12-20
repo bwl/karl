@@ -103,7 +103,7 @@ export async function showStack(name: string) {
   }
 
   console.log(`\n**Usage:**`);
-  console.log(`  karl as ${name} "your task"`);
+  console.log(`  karl ${name} "your task"`);
 }
 
 /**
@@ -145,18 +145,74 @@ export async function createStack(name: string, options: { model?: string; skill
     stack.skill = options.skill;
   }
 
-  // Add some defaults for empty stacks
-  if (Object.keys(stack).length === 0) {
-    stack.model = 'smart';
-  }
-
   writeFileSync(stackPath, JSON.stringify(stack, null, 2) + '\n');
 
   console.log(`✓ Stack "${name}" created at ${stackPath}`);
   console.log(`\nUsage:`);
-  console.log(`  karl as ${name} "your task"`);
+  console.log(`  karl ${name} "your task"`);
   console.log(`\nEdit the stack:`);
   console.log(`  ${stackPath}`);
+}
+
+/**
+ * Remove a stack
+ */
+export async function removeStack(name: string) {
+  const globalPath = join(homedir(), '.config', 'karl', 'stacks', `${name}.json`);
+  const projectPath = join(process.cwd(), '.karl', 'stacks', `${name}.json`);
+
+  let removed = false;
+
+  if (existsSync(projectPath)) {
+    const { unlinkSync } = await import('fs');
+    unlinkSync(projectPath);
+    console.log(`✓ Removed project stack: ${projectPath}`);
+    removed = true;
+  }
+
+  if (existsSync(globalPath)) {
+    const { unlinkSync } = await import('fs');
+    unlinkSync(globalPath);
+    console.log(`✓ Removed global stack: ${globalPath}`);
+    removed = true;
+  }
+
+  if (!removed) {
+    console.error(`Stack "${name}" not found.`);
+    process.exit(1);
+  }
+}
+
+/**
+ * Edit a stack (opens in default editor or shows path)
+ */
+export async function editStack(name: string) {
+  const globalPath = join(homedir(), '.config', 'karl', 'stacks', `${name}.json`);
+  const projectPath = join(process.cwd(), '.karl', 'stacks', `${name}.json`);
+
+  let stackPath: string | null = null;
+
+  if (existsSync(projectPath)) {
+    stackPath = projectPath;
+  } else if (existsSync(globalPath)) {
+    stackPath = globalPath;
+  }
+
+  if (!stackPath) {
+    console.error(`Stack "${name}" not found.`);
+    process.exit(1);
+  }
+
+  // Try to open in editor
+  const editor = process.env.EDITOR || process.env.VISUAL;
+  if (editor) {
+    const { spawnSync } = await import('child_process');
+    spawnSync(editor, [stackPath], { stdio: 'inherit' });
+  } else {
+    console.log(`Stack location: ${stackPath}`);
+    console.log('');
+    console.log('Set $EDITOR to open automatically, or edit the file directly.');
+  }
 }
 
 /**
@@ -207,6 +263,30 @@ export async function handleStacksCommand(args: string[]) {
       await createStack(name, createOptions);
       break;
 
+    case 'remove':
+    case 'rm':
+    case 'delete':
+      if (rest.length === 0) {
+        console.error('Usage: karl stacks remove <stack-name>');
+        process.exit(1);
+      }
+      const stackToRemove = rest[0];
+      if (stackToRemove === 'default') {
+        console.error('Cannot delete the "default" stack.');
+        console.error('You can modify it with: karl stacks edit default');
+        process.exit(1);
+      }
+      await removeStack(stackToRemove);
+      break;
+
+    case 'edit':
+      if (rest.length === 0) {
+        console.error('Usage: karl stacks edit <stack-name>');
+        process.exit(1);
+      }
+      await editStack(rest[0]);
+      break;
+
     default:
       if (!command) {
         console.error('Usage: karl stacks <command>');
@@ -215,9 +295,11 @@ export async function handleStacksCommand(args: string[]) {
         console.error('  list              List available stacks');
         console.error('  show <name>       Show stack details');
         console.error('  create <name>     Create a new stack');
+        console.error('  edit <name>       Edit a stack');
+        console.error('  remove <name>     Remove a stack');
       } else {
         console.error(`Unknown stacks command: ${command}`);
-        console.error('Available commands: list, show, create');
+        console.error('Available commands: list, show, create, edit, remove');
       }
       process.exit(1);
   }

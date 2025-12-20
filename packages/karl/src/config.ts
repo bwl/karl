@@ -2,34 +2,13 @@ import path from 'path';
 import { KarlConfig, CliOptions, ProviderConfig } from './types.js';
 import { deepMerge, expandEnv, readTextIfExists, resolveHomePath } from './utils.js';
 import { loadOAuthCredentials } from './oauth.js';
+import { loadModelsFromDir } from './commands/models.js';
+import { loadProvidersFromDir } from './commands/providers.js';
 
 const DEFAULT_CONFIG: KarlConfig = {
-  defaultModel: 'fast',
-  models: {
-    fast: {
-      provider: 'anthropic',
-      model: 'claude-sonnet-4-20250514'
-    },
-    smart: {
-      provider: 'anthropic',
-      model: 'claude-opus-4-20250514'
-    }
-  },
-  providers: {
-    'claude-pro-max': {
-      type: 'anthropic',
-      authType: 'oauth'
-    },
-    openrouter: {
-      type: 'openai',
-      baseUrl: 'https://openrouter.ai/api/v1',
-      apiKey: '${OPENROUTER_API_KEY}'
-    },
-    anthropic: {
-      type: 'anthropic',
-      apiKey: '${ANTHROPIC_API_KEY}'
-    }
-  },
+  defaultModel: '',
+  models: {},
+  providers: {},
   tools: {
     enabled: ['bash', 'read', 'write', 'edit'],
     custom: ['~/.config/karl/tools/*.ts']
@@ -78,8 +57,16 @@ export async function loadConfig(cwd: string): Promise<KarlConfig> {
   const globalConfig = await readConfigFile(globalPath);
   const projectConfig = await readConfigFile(projectPath);
 
+  // Load models and providers from folders
+  const models = loadModelsFromDir();
+  const providers = expandEnvInObject(loadProvidersFromDir());
+
   let merged = deepMerge(DEFAULT_CONFIG, globalConfig ?? undefined);
   merged = deepMerge(merged, projectConfig ?? undefined);
+
+  // Merge folder-loaded models and providers (folder takes precedence)
+  merged.models = { ...merged.models, ...models };
+  merged.providers = { ...merged.providers, ...providers };
 
   return merged;
 }
@@ -93,13 +80,6 @@ export interface ResolvedModel {
 
 export function resolveModel(config: KarlConfig, options: CliOptions): ResolvedModel {
   let modelKey = config.defaultModel;
-
-  if (options.fast) {
-    modelKey = 'fast';
-  }
-  if (options.smart) {
-    modelKey = 'smart';
-  }
 
   if (options.model) {
     if (config.models[options.model]) {

@@ -309,14 +309,14 @@ export async function createBuiltinTools(ctx: ToolContext): Promise<AgentTool[]>
     )
   };
 
-  const read: AgentTool<typeof readSchema> = {
+  const read: AgentTool<typeof readSchema, any> = {
     name: 'read',
     label: 'read',
     description: 'Read file contents. Returns text for text files, base64 for binary/images.',
     parameters: readSchema,
-    execute: wrapExecute(
+    execute: wrapExecute<Static<typeof readSchema>, any>(
       'read',
-      async (params) => {
+      async (params): Promise<AgentToolResult<any>> => {
         const resolved = path.isAbsolute(params.path) ? params.path : path.join(ctx.cwd, params.path);
         const offset = params.offset ?? 0;
         const buffer = await loadFileSlice(resolved, offset, params.limit);
@@ -396,5 +396,6 @@ export async function createBuiltinTools(ctx: ToolContext): Promise<AgentTool[]>
     )
   };
 
-  return [bash, read, write, edit];
+  // Cast to any[] to avoid TypeScript issues with heterogeneous tool parameter types
+  return [bash, read, write, edit] as AgentTool<any, any>[];
 }

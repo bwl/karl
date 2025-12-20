@@ -1,6 +1,6 @@
 /**
  * CLI command for outputting system info as JSON
- * Used by karl-tui to display status information
+ * Display system information and configuration status
  */
 
 import { existsSync } from 'fs';

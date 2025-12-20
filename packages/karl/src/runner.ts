@@ -116,11 +116,11 @@ export async function runTask(params: RunTaskParams): Promise<TaskResult> {
     // Map provider key to pi-ai provider name
     const piAiProvider = mapToPiAiProvider(params.providerKey);
 
-    // Set API key for the provider
-    setApiKey(piAiProvider, params.apiKey);
+    // Set API key for the provider (cast to any since pi-ai uses strict provider types)
+    setApiKey(piAiProvider as any, params.apiKey);
 
     // Get model config from pi-ai
-    const model = getModel(piAiProvider, params.model);
+    const model = getModel(piAiProvider as any, params.model);
 
     // Build context
     const context = {

@@ -103,7 +103,8 @@ export async function validateSkill(options: SkillsValidateOptions) {
     
     return true;
   } catch (error) {
-    console.error(`✗ Skill validation failed: ${error.message}`);
+    const message = error instanceof Error ? error.message : String(error);
+    console.error(`✗ Skill validation failed: ${message}`);
     process.exit(1);
   }
 }
@@ -144,7 +145,8 @@ export async function createSkill(options: SkillsCreateOptions) {
     console.log(`5. Use your skill with: karl --skill ${options.name} "your task"`);
 
   } catch (error) {
-    console.error(`Failed to create skill: ${error.message}`);
+    const message = error instanceof Error ? error.message : String(error);
+    console.error(`Failed to create skill: ${message}`);
     process.exit(1);
   }
 }
