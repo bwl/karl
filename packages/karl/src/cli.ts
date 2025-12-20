@@ -246,7 +246,7 @@ Flags (use with 'run'):
   --no-tools           Disable tool use
   --unrestricted       Allow writes outside working directory
   --context            Extra system prompt text
-  --context-file       Path to extra system prompt file
+  --context-file       Path to context file (use - for stdin)
   --tasks-file         Path to a tasks file (one per line)
   --volley             Enable multi-task mode (task1 task2 ...)
   -                    Read task from stdin
@@ -644,11 +644,33 @@ async function main() {
   const tasksFromFile = effectiveOptions.tasksFile ? await readTasksFile(effectiveOptions.tasksFile, cwd) : [];
   const tasks: (string | null)[] = [...rawTasks, ...tasksFromFile];
 
-  const needsStdin = tasks.some((task) => task === null) || (tasks.length === 0 && !process.stdin.isTTY);
-  let stdinTask: string | null = null;
-  if (needsStdin) {
-    stdinTask = (await readStdin()).trim();
+  // Check if context should be read from stdin
+  const contextFromStdin = effectiveOptions.contextFile === '-';
+  const needsStdinForTask = tasks.some((task) => task === null);
+
+  // Can't read both context and task from stdin
+  if (contextFromStdin && needsStdinForTask) {
+    throw new Error('Cannot use both --context-file - and - for task. Choose one.');
   }
+
+  // Read stdin if needed for context or task
+  let stdinContent: string | null = null;
+  const needsStdin = contextFromStdin || needsStdinForTask || (tasks.length === 0 && !process.stdin.isTTY);
+  if (needsStdin) {
+    stdinContent = (await readStdin()).trim();
+  }
+
+  // Handle context from stdin
+  if (contextFromStdin && stdinContent) {
+    // Append stdin content to context, clear contextFile so it's not read as a file
+    effectiveOptions.context = effectiveOptions.context
+      ? `${effectiveOptions.context}\n\n${stdinContent}`
+      : stdinContent;
+    effectiveOptions.contextFile = undefined;
+  }
+
+  // Handle task from stdin
+  const stdinTask = needsStdinForTask ? stdinContent : null;
 
   const finalTasks: string[] = [];
   for (const task of tasks) {
