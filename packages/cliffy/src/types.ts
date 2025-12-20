@@ -108,6 +108,7 @@ export interface CliOptions {
   stack?: string;             // Config stack name (via "as" syntax)
   temperature?: number;       // Temperature override
   maxTokens?: number;         // Max tokens override
+  dryRun?: boolean;           // Show config without running
 }
 
 export interface SchedulerOptions {

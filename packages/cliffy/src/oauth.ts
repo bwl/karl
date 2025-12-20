@@ -227,12 +227,55 @@ export async function getProviderOAuthToken(provider: string): Promise<string | 
 }
 
 /**
+ * Ensure the claude-pro-max provider exists in the user's global config
+ */
+async function ensureClaudeProMaxProvider(): Promise<void> {
+  const configPath = resolveHomePath('~/.config/cliffy/cliffy.json');
+
+  let config: Record<string, unknown> = {};
+
+  // Read existing config if it exists
+  if (existsSync(configPath)) {
+    try {
+      const content = readFileSync(configPath, 'utf-8');
+      config = JSON.parse(content);
+    } catch {
+      // If parsing fails, start with empty config
+    }
+  }
+
+  // Ensure providers object exists
+  if (!config.providers || typeof config.providers !== 'object') {
+    config.providers = {};
+  }
+
+  const providers = config.providers as Record<string, unknown>;
+
+  // Add claude-pro-max provider if it doesn't exist
+  if (!providers['claude-pro-max']) {
+    providers['claude-pro-max'] = {
+      type: 'anthropic',
+      authType: 'oauth'
+    };
+
+    // Ensure config directory exists
+    const configDir = resolveHomePath('~/.config/cliffy');
+    if (!existsSync(configDir)) {
+      mkdirSync(configDir, { recursive: true, mode: 0o700 });
+    }
+
+    // Write updated config
+    writeFileSync(configPath, JSON.stringify(config, null, 2), 'utf-8');
+  }
+}
+
+/**
  * Interactive login flow for CLI
  */
 export async function runLoginFlow(): Promise<void> {
   const readline = await import('readline');
   const { exec } = await import('child_process');
-  
+
   const rl = readline.createInterface({
     input: process.stdin,
     output: process.stdout
@@ -248,7 +291,7 @@ export async function runLoginFlow(): Promise<void> {
   await loginAnthropic({
     onAuthUrl: (url) => {
       console.log('Opening browser...\n');
-      
+
       // Try to open browser
       const openCmd = process.platform === 'darwin' ? 'open' :
                       process.platform === 'win32' ? 'start' : 'xdg-open';
@@ -268,5 +311,10 @@ export async function runLoginFlow(): Promise<void> {
     }
   });
 
+  // Ensure claude-pro-max provider exists in config
+  await ensureClaudeProMaxProvider();
+
   console.log('\n✓ Login successful! Credentials saved.\n');
+  console.log('The "claude-pro-max" provider has been added to your config.');
+  console.log('You can now create models that use this provider.\n');
 }

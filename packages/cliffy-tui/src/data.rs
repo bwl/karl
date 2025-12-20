@@ -150,10 +150,19 @@ pub fn load_config(path: &Path) -> Result<CliffyConfig> {
     Ok(config)
 }
 
-/// Save config to a path
+/// Save config to a path (creates parent directories if needed)
 pub fn save_config(config: &CliffyConfig, path: &Path) -> Result<()> {
+    // Create parent directories if they don't exist
+    if let Some(parent) = path.parent() {
+        if !parent.exists() {
+            fs::create_dir_all(parent)
+                .with_context(|| format!("Failed to create config directory {:?}", parent))?;
+        }
+    }
+
     let content = serde_json::to_string_pretty(config)?;
-    fs::write(path, content)?;
+    fs::write(path, content)
+        .with_context(|| format!("Failed to write config to {:?}", path))?;
     Ok(())
 }
 
@@ -171,9 +180,12 @@ pub fn project_config_path() -> PathBuf {
 /// Load merged config (global + project)
 pub fn load_merged_config() -> Result<(CliffyConfig, PathBuf)> {
     let mut config = CliffyConfig::default();
-    let mut config_path = PathBuf::new();
 
-    // Load global config
+    // Default config path to global location (even if it doesn't exist yet)
+    let mut config_path = global_config_path()
+        .unwrap_or_else(|| PathBuf::from(".cliffy.json"));
+
+    // Load global config if it exists
     if let Some(global_path) = global_config_path() {
         if global_path.exists() {
             if let Ok(global_config) = load_config(&global_path) {

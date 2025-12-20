@@ -5,6 +5,18 @@ import { SchedulerEvent, TaskResult, TokenUsage, ToolsConfig } from './types.js'
 import { formatError } from './utils.js';
 import { TaskRunError, TimeoutError } from './errors.js';
 
+/**
+ * Map cliffy provider keys to pi-ai provider names
+ * cliffy uses provider names from config (e.g., "claude-pro-max")
+ * pi-ai uses standard provider names (e.g., "anthropic")
+ */
+function mapToPiAiProvider(providerKey: string): string {
+  const mapping: Record<string, string> = {
+    'claude-pro-max': 'anthropic',
+  };
+  return mapping[providerKey] ?? providerKey;
+}
+
 export interface RunTaskParams {
   task: string;
   index: number;
@@ -101,11 +113,14 @@ export async function runTask(params: RunTaskParams): Promise<TaskResult> {
       tools = [...filteredBuiltins, ...customTools];
     }
 
+    // Map provider key to pi-ai provider name
+    const piAiProvider = mapToPiAiProvider(params.providerKey);
+
     // Set API key for the provider
-    setApiKey(params.providerKey, params.apiKey);
+    setApiKey(piAiProvider, params.apiKey);
 
     // Get model config from pi-ai
-    const model = getModel(params.providerKey, params.model);
+    const model = getModel(piAiProvider, params.model);
 
     // Build context
     const context = {

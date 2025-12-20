@@ -1,6 +1,6 @@
 #!/usr/bin/env bun
 import path from 'path';
-import { loadConfig, resolveModel } from './config.js';
+import { loadConfig, resolveModel, isConfigValid } from './config.js';
 import { buildSystemPrompt } from './context.js';
 import { HookRunner } from './hooks.js';
 import { createTuiRenderer } from './tui.js';
@@ -37,6 +37,7 @@ Flags:
   -                    Read a task from stdin
   --login              OAuth login (Claude Pro/Max)
   --logout             Clear OAuth credentials
+  --dry-run            Show config without running
   --help, -h           Show help
   --version            Show version
 
@@ -53,6 +54,7 @@ Skills Commands:
   cliffy skills validate <path>   Validate a skill
 
 Setup & Info:
+  cliffy init                     Set up a provider and default model
   cliffy setup                    Open the config TUI
   cliffy info                     Show system info (add --json for JSON output)
 
@@ -171,6 +173,9 @@ function parseArgs(argv: string[]): { options: CliOptions; tasks: (string | null
       case '--tasks-file':
         options.tasksFile = requireValue(flag, inlineValue ?? argv[++i]);
         break;
+      case '--dry-run':
+        options.dryRun = true;
+        break;
       case '--login':
         wantsLogin = true;
         break;
@@ -211,6 +216,21 @@ async function main() {
       const cargoResult = spawnSync('cargo', ['run', '--manifest-path', 'packages/cliffy-tui/Cargo.toml'], { stdio: 'inherit' });
       if (cargoResult.error) {
         console.error('Could not launch config TUI. Install cliffy-tui or run from repo root.');
+        process.exitCode = 1;
+      }
+    }
+    return;
+  }
+
+  // Handle init command - launches the init wizard
+  if (args[0] === 'init') {
+    const { spawnSync } = await import('child_process');
+    const result = spawnSync('cliffy-tui', ['--init'], { stdio: 'inherit' });
+    if (result.error) {
+      // Try cargo run as fallback for development
+      const cargoResult = spawnSync('cargo', ['run', '--manifest-path', 'packages/cliffy-tui/Cargo.toml', '--', '--init'], { stdio: 'inherit' });
+      if (cargoResult.error) {
+        console.error('Could not launch init wizard. Install cliffy-tui or run from repo root.');
         process.exitCode = 1;
       }
     }
@@ -275,7 +295,30 @@ async function main() {
   }
 
   const cwd = process.cwd();
-  const config = await loadConfig(cwd);
+  let config = await loadConfig(cwd);
+
+  // Auto-init: if no valid provider+model, launch the init wizard
+  if (!isConfigValid(config)) {
+    console.log('No configured provider found. Launching setup wizard...\n');
+    const { spawnSync } = await import('child_process');
+    const result = spawnSync('cliffy-tui', ['--init'], { stdio: 'inherit' });
+    if (result.error) {
+      // Try cargo run as fallback for development
+      const cargoResult = spawnSync('cargo', ['run', '--manifest-path', 'packages/cliffy-tui/Cargo.toml', '--', '--init'], { stdio: 'inherit' });
+      if (cargoResult.error) {
+        console.error('Could not launch init wizard. Run `cliffy init` to set up.');
+        process.exitCode = 1;
+        return;
+      }
+    }
+    // Reload config after wizard completes
+    config = await loadConfig(cwd);
+    if (!isConfigValid(config)) {
+      console.error('Setup incomplete. Run `cliffy init` to configure a provider.');
+      process.exitCode = 1;
+      return;
+    }
+  }
 
   // Load and merge stack config if specified
   let effectiveOptions = options;
@@ -343,6 +386,27 @@ async function main() {
 
   if (effectiveOptions.maxConcurrent !== undefined && (!Number.isFinite(effectiveOptions.maxConcurrent) || effectiveOptions.maxConcurrent < 1)) {
     throw new Error('Invalid --max-concurrent value.');
+  }
+
+  // Dry run: show config without running
+  if (effectiveOptions.dryRun) {
+    console.log('Dry Run Configuration\n');
+    console.log(`Provider:     ${resolvedModel.providerKey}`);
+    console.log(`Model:        ${resolvedModel.model}`);
+    console.log(`Model Alias:  ${resolvedModel.modelKey}`);
+    console.log(`Auth:         ${resolvedModel.providerConfig.authType === 'oauth' ? 'OAuth' : 'API Key'}`);
+    if (effectiveOptions.skill) {
+      console.log(`Skill:        ${effectiveOptions.skill}`);
+    }
+    if (options.stack) {
+      console.log(`Stack:        ${options.stack}`);
+    }
+    console.log(`Tools:        ${effectiveOptions.noTools ? 'disabled' : config.tools.enabled.join(', ')}`);
+    console.log(`Tasks:        ${finalTasks.length}`);
+    for (const task of finalTasks) {
+      console.log(`  - "${task.length > 60 ? task.slice(0, 60) + '...' : task}"`);
+    }
+    return;
   }
 
   const systemPrompt = await buildSystemPrompt({

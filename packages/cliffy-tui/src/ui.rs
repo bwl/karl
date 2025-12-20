@@ -6,12 +6,18 @@ use ratatui::{
     Frame,
 };
 
-use crate::app::{App, FormMode, InputMode, Section, View};
+use crate::app::{App, FormMode, InitStep, InputMode, OAuthStatus, ProviderOption, Section, View};
 use crate::theme;
 use crate::widgets::{FormFieldWidget, ToggleFieldWidget};
 
 /// Main draw function
 pub fn draw(f: &mut Frame, app: &mut App) {
+    // Check if we're in wizard mode - takes over entire UI
+    if app.init_wizard.is_some() {
+        draw_wizard(f, app);
+        return;
+    }
+
     // Check if we're in a form view - take over the whole screen
     if app.view == View::Edit || app.view == View::Create {
         match app.section {
@@ -102,30 +108,23 @@ fn draw_settings_section(f: &mut Frame, app: &App, area: Rect) {
             lines.push(Line::from(Span::styled(format!("  Error: {}", e), theme::dim_style())));
         }
         CliStatus::Loaded(info) => {
-            // Claude Pro/Max status
-            if let Some(auth) = info.auth.get("anthropic") {
-                let (icon, status) = if auth.authenticated && auth.method == "oauth" {
-                    ("✓", "logged in")
+            // Show auth status for all providers
+            for (name, auth) in &info.auth {
+                let (icon, status) = if auth.authenticated {
+                    if auth.method == "oauth" {
+                        ("✓", "logged in")
+                    } else {
+                        ("✓", "API key set")
+                    }
                 } else {
-                    ("○", "not logged in [L]")
+                    if auth.method == "none" && info.providers.get(name).map(|p| p.provider_type.as_str()) == Some("anthropic") {
+                        ("○", "not logged in [L]")
+                    } else {
+                        ("○", "no key")
+                    }
                 };
                 lines.push(Line::from(vec![
-                    Span::styled(format!("  {} ", icon), if auth.authenticated && auth.method == "oauth" {
-                        Style::default().fg(Color::Green)
-                    } else {
-                        theme::dim_style()
-                    }),
-                    Span::styled("Claude: ", theme::normal_style()),
-                    Span::styled(status, theme::dim_style()),
-                ]));
-            }
-
-            // Other providers
-            for (name, provider) in &info.providers {
-                let icon = if provider.has_key { "✓" } else { "○" };
-                let status = if provider.has_key { "API key set" } else { "no key" };
-                lines.push(Line::from(vec![
-                    Span::styled(format!("  {} ", icon), if provider.has_key {
+                    Span::styled(format!("  {} ", icon), if auth.authenticated {
                         Style::default().fg(Color::Green)
                     } else {
                         theme::dim_style()
@@ -447,13 +446,35 @@ fn draw_model_form(f: &mut Frame, app: &App, area: Rect) {
     .block(provider_block);
     f.render_widget(provider_text, chunks[1]);
 
-    // Model field
-    let model_widget = FormFieldWidget::new("Model ID", &form.model.value)
-        .focused(form.focused_field == 2)
-        .cursor(form.model.cursor)
-        .required(true)
-        .placeholder(Some(&form.model.placeholder));
-    f.render_widget(model_widget, chunks[2]);
+    // Model field (selector)
+    let model_focused = form.focused_field == 2;
+    let model_value = form.model.selected_value().unwrap_or("(none)");
+    let model_display = if form.model.len() > 1 {
+        format!("◀ {} ▶", model_value)
+    } else {
+        model_value.to_string()
+    };
+
+    let model_block = Block::default()
+        .borders(Borders::ALL)
+        .border_style(if model_focused {
+            theme::highlight_style()
+        } else {
+            theme::border_style(false)
+        })
+        .title(Span::styled(
+            "Model *",
+            if model_focused { theme::highlight_style() } else { theme::dim_style() }
+        ));
+
+    let model_text = Paragraph::new(Line::from(vec![
+        Span::styled(
+            model_display,
+            if model_focused { theme::highlight_style() } else { theme::normal_style() }
+        ),
+    ]))
+    .block(model_block);
+    f.render_widget(model_text, chunks[2]);
 
     // Set as default toggle
     let toggle_widget = ToggleFieldWidget::new("Set as default model", form.set_as_default.value)
@@ -804,6 +825,390 @@ fn draw_confirm_dialog(f: &mut Frame, app: &App) {
         let buttons_widget = Paragraph::new(buttons).alignment(Alignment::Center);
         f.render_widget(buttons_widget, button_area);
     }
+}
+
+/// Draw the init wizard
+fn draw_wizard(f: &mut Frame, app: &App) {
+    let wizard = match &app.init_wizard {
+        Some(w) => w,
+        None => return,
+    };
+
+    let area = f.area();
+
+    // Main layout
+    let chunks = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([
+            Constraint::Length(3), // Title
+            Constraint::Min(0),    // Content
+            Constraint::Length(2), // Footer/help
+        ])
+        .split(area);
+
+    // Title
+    let step_name = match wizard.step {
+        InitStep::Welcome => "Welcome",
+        InitStep::SelectProvider => "Select Provider",
+        InitStep::AuthenticateOAuth => "Login",
+        InitStep::AuthenticateApiKey => "API Key",
+        InitStep::CreateModel => "Create Model",
+        InitStep::Confirm => "Confirm",
+    };
+
+    let title_block = Block::default()
+        .borders(Borders::BOTTOM)
+        .border_style(Style::default().fg(theme::BORDER));
+
+    let title = Paragraph::new(Line::from(vec![
+        Span::styled(" cliffy ", theme::title_style()),
+        Span::styled("setup", theme::dim_style()),
+        Span::raw("  "),
+        Span::styled(format!("Step: {}", step_name), theme::normal_style()),
+    ]))
+    .block(title_block);
+    f.render_widget(title, chunks[0]);
+
+    // Content based on step
+    let content_area = chunks[1];
+    match wizard.step {
+        InitStep::Welcome => draw_wizard_welcome(f, content_area),
+        InitStep::SelectProvider => draw_wizard_provider(f, wizard, content_area),
+        InitStep::AuthenticateOAuth => draw_wizard_oauth(f, wizard, content_area),
+        InitStep::AuthenticateApiKey => draw_wizard_api_key(f, wizard, content_area),
+        InitStep::CreateModel => draw_wizard_model(f, wizard, content_area),
+        InitStep::Confirm => draw_wizard_confirm(f, wizard, content_area),
+    }
+
+    // Footer with help
+    let help = match wizard.step {
+        InitStep::Welcome => "Press Enter to continue  |  Esc to cancel",
+        InitStep::SelectProvider => "j/k:navigate  Enter:select  |  Esc to cancel",
+        InitStep::AuthenticateOAuth => "Enter:login  S:skip  Backspace:back  |  Esc to cancel",
+        InitStep::AuthenticateApiKey => "Enter:continue  Backspace:back  |  Esc to cancel",
+        InitStep::CreateModel => "Tab:switch field  j/k:select model  Enter:continue  |  Esc to cancel",
+        InitStep::Confirm => "Enter/Y:confirm  N:back  |  Esc to cancel",
+    };
+
+    let footer = Paragraph::new(help)
+        .style(theme::dim_style())
+        .alignment(Alignment::Center);
+    f.render_widget(footer, chunks[2]);
+}
+
+fn draw_wizard_welcome(f: &mut Frame, area: Rect) {
+    let center = centered_rect(80, 60, area);
+
+    let lines = vec![
+        Line::from(""),
+        Line::from(Span::styled("Welcome to Cliffy!", Style::default().fg(theme::PRIMARY).add_modifier(Modifier::BOLD))),
+        Line::from(""),
+        Line::from("This wizard will help you set up your first provider and model."),
+        Line::from(""),
+        Line::from("Cliffy supports multiple AI providers:"),
+        Line::from(vec![
+            Span::raw("  • "),
+            Span::styled("Claude Pro/Max", theme::highlight_style()),
+            Span::raw(" - Use your Claude subscription (OAuth)"),
+        ]),
+        Line::from(vec![
+            Span::raw("  • "),
+            Span::styled("Anthropic API", theme::highlight_style()),
+            Span::raw(" - Direct API access with API key"),
+        ]),
+        Line::from(vec![
+            Span::raw("  • "),
+            Span::styled("OpenRouter", theme::highlight_style()),
+            Span::raw(" - Access multiple models with one key"),
+        ]),
+        Line::from(""),
+        Line::from("Press Enter to get started."),
+    ];
+
+    let paragraph = Paragraph::new(lines)
+        .alignment(Alignment::Center)
+        .block(Block::default().borders(Borders::ALL).border_style(theme::border_style(true)));
+
+    f.render_widget(paragraph, center);
+}
+
+fn draw_wizard_provider(f: &mut Frame, wizard: &crate::app::InitWizard, area: Rect) {
+    let center = centered_rect(70, 50, area);
+
+    let providers = ProviderOption::all();
+
+    let mut lines = vec![
+        Line::from(""),
+        Line::from("Select a provider:"),
+        Line::from(""),
+    ];
+
+    for (i, provider) in providers.iter().enumerate() {
+        let is_selected = i == wizard.provider_index;
+        let marker = if is_selected { "▶ " } else { "  " };
+        let style = if is_selected {
+            theme::selected_style()
+        } else {
+            theme::normal_style()
+        };
+
+        let auth_hint = if provider.auth_type == "oauth" {
+            " (OAuth)"
+        } else {
+            " (API Key)"
+        };
+
+        lines.push(Line::from(vec![
+            Span::styled(marker, style),
+            Span::styled(provider.name, style),
+            Span::styled(auth_hint, theme::dim_style()),
+        ]));
+    }
+
+    lines.push(Line::from(""));
+
+    // Provider description
+    let selected = &providers[wizard.provider_index];
+    let description = match selected.key {
+        "claude-pro-max" => "Use your existing Claude Pro or Max subscription.\nNo API costs - uses your subscription quota.",
+        "anthropic" => "Direct access to Anthropic's API.\nRequires an Anthropic API key (usage billed separately).",
+        "openrouter" => "Access Claude and other models through OpenRouter.\nRequires an OpenRouter API key.",
+        _ => "",
+    };
+
+    lines.push(Line::from(""));
+    for line in description.lines() {
+        lines.push(Line::from(Span::styled(line, theme::dim_style())));
+    }
+
+    let paragraph = Paragraph::new(lines)
+        .block(Block::default().borders(Borders::ALL).border_style(theme::border_style(true)).title(" Select Provider "));
+
+    f.render_widget(paragraph, center);
+}
+
+fn draw_wizard_oauth(f: &mut Frame, wizard: &crate::app::InitWizard, area: Rect) {
+    let center = centered_rect(70, 50, area);
+
+    let mut lines = vec![
+        Line::from(""),
+        Line::from(Span::styled("Claude Pro/Max Authentication", theme::highlight_style())),
+        Line::from(""),
+    ];
+
+    match &wizard.oauth_status {
+        OAuthStatus::NotStarted => {
+            lines.push(Line::from("Press Enter to open your browser and log in to Claude."));
+            lines.push(Line::from(""));
+            lines.push(Line::from("You'll be asked to authorize Cliffy to use your account."));
+            lines.push(Line::from(""));
+            lines.push(Line::from(Span::styled("Press S to skip and set up later.", theme::dim_style())));
+        }
+        OAuthStatus::InProgress => {
+            lines.push(Line::from(Span::styled("Waiting for login...", Style::default().fg(Color::Yellow))));
+            lines.push(Line::from(""));
+            lines.push(Line::from("Complete the login in your browser, then return here."));
+        }
+        OAuthStatus::Success => {
+            lines.push(Line::from(Span::styled("✓ Login successful!", Style::default().fg(Color::Green))));
+            lines.push(Line::from(""));
+            lines.push(Line::from("Press Enter to continue."));
+        }
+        OAuthStatus::Failed(err) => {
+            lines.push(Line::from(Span::styled(format!("✗ Login failed: {}", err), Style::default().fg(Color::Red))));
+            lines.push(Line::from(""));
+            lines.push(Line::from("Press Enter to try again, or Backspace to go back."));
+        }
+    }
+
+    let paragraph = Paragraph::new(lines)
+        .block(Block::default().borders(Borders::ALL).border_style(theme::border_style(true)).title(" Login "));
+
+    f.render_widget(paragraph, center);
+}
+
+fn draw_wizard_api_key(f: &mut Frame, wizard: &crate::app::InitWizard, area: Rect) {
+    let center = centered_rect(70, 50, area);
+    let provider = wizard.selected_provider();
+
+    let key_name = match provider.key {
+        "anthropic" => "ANTHROPIC_API_KEY",
+        "openrouter" => "OPENROUTER_API_KEY",
+        _ => "API_KEY",
+    };
+
+    let mut lines = vec![
+        Line::from(""),
+        Line::from(Span::styled(format!("{} API Key", provider.name), theme::highlight_style())),
+        Line::from(""),
+        Line::from(format!("Enter your {} below:", key_name)),
+        Line::from(""),
+    ];
+
+    // Input field display
+    let input_display = if wizard.api_key.value.is_empty() {
+        Span::styled("(enter key here)", theme::dim_style())
+    } else {
+        // Mask the key for security
+        let masked = "*".repeat(wizard.api_key.value.len().min(40));
+        Span::styled(masked, theme::normal_style())
+    };
+
+    lines.push(Line::from(vec![
+        Span::raw("  > "),
+        input_display,
+    ]));
+
+    lines.push(Line::from(""));
+
+    // Error message if any
+    if let Some(ref err) = wizard.error_message {
+        lines.push(Line::from(Span::styled(err.as_str(), Style::default().fg(Color::Red))));
+        lines.push(Line::from(""));
+    }
+
+    // Hint
+    let hint = match provider.key {
+        "anthropic" => "Get your key at: https://console.anthropic.com/settings/keys",
+        "openrouter" => "Get your key at: https://openrouter.ai/keys",
+        _ => "",
+    };
+    lines.push(Line::from(Span::styled(hint, theme::dim_style())));
+
+    let paragraph = Paragraph::new(lines)
+        .block(Block::default().borders(Borders::ALL).border_style(theme::border_style(true)).title(" API Key "));
+
+    f.render_widget(paragraph, center);
+}
+
+fn draw_wizard_model(f: &mut Frame, wizard: &crate::app::InitWizard, area: Rect) {
+    let center = centered_rect(70, 60, area);
+    let provider = wizard.selected_provider();
+    let alias_focused = wizard.model_focused_field == 0;
+    let model_focused = wizard.model_focused_field == 1;
+
+    let mut lines = vec![
+        Line::from(""),
+        Line::from(Span::styled("Create Default Model", theme::highlight_style())),
+        Line::from(""),
+        Line::from(format!("Provider: {}", provider.name)),
+        Line::from(""),
+    ];
+
+    // Model alias label with focus indicator
+    let alias_label_style = if alias_focused {
+        theme::highlight_style()
+    } else {
+        theme::normal_style()
+    };
+    lines.push(Line::from(Span::styled(
+        if alias_focused { "▶ Model alias:" } else { "  Model alias:" },
+        alias_label_style
+    )));
+
+    // Model alias field
+    let alias_display = if wizard.model_alias.value.is_empty() {
+        Span::styled("(type alias here)", theme::dim_style())
+    } else {
+        let style = if alias_focused { theme::highlight_style() } else { theme::normal_style() };
+        Span::styled(wizard.model_alias.value.as_str(), style)
+    };
+
+    lines.push(Line::from(vec![
+        Span::raw("    "),
+        alias_display,
+        if alias_focused { Span::styled("_", theme::highlight_style()) } else { Span::raw("") },
+    ]));
+
+    lines.push(Line::from(""));
+
+    // Model selector label with focus indicator
+    let model_label_style = if model_focused {
+        theme::highlight_style()
+    } else {
+        theme::normal_style()
+    };
+    lines.push(Line::from(Span::styled(
+        if model_focused { "▶ Select model:" } else { "  Select model:" },
+        model_label_style
+    )));
+    lines.push(Line::from(""));
+
+    // Model selector
+    for (_, model_id) in provider.default_models.iter() {
+        let is_selected = wizard.model_selector.selected_value() == Some(*model_id);
+        let marker = if is_selected && model_focused { "  ▶ " } else if is_selected { "  • " } else { "    " };
+        let style = if is_selected && model_focused {
+            theme::selected_style()
+        } else if is_selected {
+            theme::normal_style()
+        } else {
+            theme::dim_style()
+        };
+
+        lines.push(Line::from(vec![
+            Span::styled(marker, style),
+            Span::styled(*model_id, style),
+        ]));
+    }
+
+    // Error message if any
+    if let Some(ref err) = wizard.error_message {
+        lines.push(Line::from(""));
+        lines.push(Line::from(Span::styled(err.as_str(), Style::default().fg(Color::Red))));
+    }
+
+    // Help hint
+    lines.push(Line::from(""));
+    lines.push(Line::from(Span::styled("Tab: switch field", theme::dim_style())));
+
+    let paragraph = Paragraph::new(lines)
+        .block(Block::default().borders(Borders::ALL).border_style(theme::border_style(true)).title(" Create Model "));
+
+    f.render_widget(paragraph, center);
+}
+
+fn draw_wizard_confirm(f: &mut Frame, wizard: &crate::app::InitWizard, area: Rect) {
+    let center = centered_rect(70, 60, area);
+    let provider = wizard.selected_provider();
+    let model_id = wizard.selected_model().unwrap_or(provider.default_models[0].1);
+
+    let lines = vec![
+        Line::from(""),
+        Line::from(Span::styled("Confirm Setup", theme::highlight_style())),
+        Line::from(""),
+        Line::from("The following will be saved to your config:"),
+        Line::from(""),
+        Line::from(vec![
+            Span::styled("  Provider: ", theme::dim_style()),
+            Span::styled(provider.name, theme::normal_style()),
+        ]),
+        Line::from(vec![
+            Span::styled("  Auth: ", theme::dim_style()),
+            Span::styled(
+                if provider.auth_type == "oauth" { "OAuth (logged in)" } else { "API Key" },
+                theme::normal_style()
+            ),
+        ]),
+        Line::from(""),
+        Line::from(vec![
+            Span::styled("  Model alias: ", theme::dim_style()),
+            Span::styled(wizard.model_alias.value.as_str(), theme::normal_style()),
+        ]),
+        Line::from(vec![
+            Span::styled("  Model ID: ", theme::dim_style()),
+            Span::styled(model_id, theme::normal_style()),
+        ]),
+        Line::from(""),
+        Line::from(Span::styled("Config will be saved to ~/.config/cliffy/cliffy.json", theme::dim_style())),
+        Line::from(""),
+        Line::from("Press Enter or Y to confirm."),
+    ];
+
+    let paragraph = Paragraph::new(lines)
+        .block(Block::default().borders(Borders::ALL).border_style(theme::border_style(true)).title(" Confirm "));
+
+    f.render_widget(paragraph, center);
 }
 
 /// Create a centered rect

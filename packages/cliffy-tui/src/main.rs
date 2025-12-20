@@ -19,6 +19,10 @@ use ratatui::{backend::CrosstermBackend, Terminal};
 use app::App;
 
 fn main() -> Result<()> {
+    // Parse command line args
+    let args: Vec<String> = std::env::args().collect();
+    let init_mode = args.iter().any(|arg| arg == "--init");
+
     // Setup terminal
     enable_raw_mode()?;
     let mut stdout = io::stdout();
@@ -27,7 +31,7 @@ fn main() -> Result<()> {
     let mut terminal = Terminal::new(backend)?;
 
     // Create app
-    let app_result = App::new();
+    let app_result = App::new(init_mode);
     let mut app = match app_result {
         Ok(app) => app,
         Err(e) => {
@@ -134,13 +138,18 @@ fn run_login_flow<B: ratatui::backend::Backend + io::Write>(
     terminal.hide_cursor()?;
     terminal.clear()?;
 
-    // Refresh CLI info after login
-    app.refresh_cli_info();
-    app.status_message = Some(if success {
-        "Login successful".to_string()
+    // Handle wizard mode differently
+    if app.is_wizard_mode() {
+        app.wizard_oauth_complete(success);
     } else {
-        "Login cancelled".to_string()
-    });
+        // Refresh CLI info after login
+        app.refresh_cli_info();
+        app.status_message = Some(if success {
+            "Login successful".to_string()
+        } else {
+            "Login cancelled".to_string()
+        });
+    }
 
     Ok(())
 }

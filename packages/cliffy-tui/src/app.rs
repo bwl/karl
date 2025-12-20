@@ -25,19 +25,22 @@ pub struct ModelForm {
     pub focused_field: usize,
     pub alias: TextInput,
     pub provider: Selector,
-    pub model: TextInput,
+    pub model: Selector,
     pub set_as_default: Toggle,
 }
 
 impl ModelForm {
     pub fn new_create(providers: Vec<String>) -> Self {
+        let first_provider = providers.first().map(|s| s.as_str()).unwrap_or("");
+        let models = ProviderOption::models_for_provider(first_provider);
+
         Self {
             mode: FormMode::Create,
             original_alias: None,
             focused_field: 0,
             alias: TextInput::new().with_placeholder("e.g., fast, smart, claude"),
             provider: Selector::new(providers),
-            model: TextInput::new().with_placeholder("e.g., claude-sonnet-4-20250514"),
+            model: Selector::new(models),
             set_as_default: Toggle::new("Set as default model"),
         }
     }
@@ -46,13 +49,17 @@ impl ModelForm {
         let mut provider_selector = Selector::new(providers);
         provider_selector.select_by_value(&config.provider);
 
+        let models = ProviderOption::models_for_provider(&config.provider);
+        let mut model_selector = Selector::new(models);
+        model_selector.select_by_value(&config.model);
+
         Self {
             mode: FormMode::Edit,
             original_alias: Some(alias.to_string()),
             focused_field: 0,
             alias: TextInput::new().with_value(alias),
             provider: provider_selector,
-            model: TextInput::new().with_value(&config.model),
+            model: model_selector,
             set_as_default: Toggle::new("Set as default model").with_value(is_default),
         }
     }
@@ -73,6 +80,14 @@ impl ModelForm {
         self.provider.selected_value()
     }
 
+    /// Update model options when provider changes
+    pub fn update_model_options(&mut self) {
+        if let Some(provider_key) = self.provider.selected_value() {
+            let models = ProviderOption::models_for_provider(provider_key);
+            self.model = Selector::new(models);
+        }
+    }
+
     pub fn validate(&self) -> Vec<String> {
         let mut errors = Vec::new();
         if self.alias.value.trim().is_empty() {
@@ -81,7 +96,7 @@ impl ModelForm {
         if self.provider.is_empty() {
             errors.push("No providers configured".to_string());
         }
-        if self.model.value.trim().is_empty() {
+        if self.model.selected_value().is_none() {
             errors.push("Model is required".to_string());
         }
         errors
@@ -382,6 +397,9 @@ pub struct App {
 
     // Login flow state
     pub needs_login_flow: bool,
+
+    // Init wizard state (for --init mode)
+    pub init_wizard: Option<InitWizard>,
 }
 
 /// Pending action that needs confirmation
@@ -393,12 +411,175 @@ pub enum PendingAction {
     Quit,
 }
 
+/// Init wizard step
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum InitStep {
+    Welcome,
+    SelectProvider,
+    AuthenticateOAuth,
+    AuthenticateApiKey,
+    CreateModel,
+    Confirm,
+}
+
+/// Provider option for wizard
+#[derive(Debug, Clone)]
+pub struct ProviderOption {
+    pub key: &'static str,
+    pub name: &'static str,
+    pub auth_type: &'static str,
+    pub provider_type: &'static str,
+    pub default_models: &'static [(&'static str, &'static str)], // (alias, model_id)
+}
+
+impl ProviderOption {
+    pub const CLAUDE_PRO_MAX: Self = Self {
+        key: "claude-pro-max",
+        name: "Claude Pro/Max",
+        auth_type: "oauth",
+        provider_type: "anthropic",
+        default_models: &[
+            ("haiku", "claude-haiku-4-5-20251001"),
+            ("sonnet", "claude-sonnet-4-5-20250929"),
+            ("opus", "claude-opus-4-5-20251101"),
+        ],
+    };
+
+    pub const ANTHROPIC: Self = Self {
+        key: "anthropic",
+        name: "Anthropic API",
+        auth_type: "api_key",
+        provider_type: "anthropic",
+        default_models: &[
+            ("fast", "claude-sonnet-4-20250514"),
+            ("smart", "claude-opus-4-20250514"),
+            ("haiku", "claude-haiku-3-5-20241022"),
+        ],
+    };
+
+    pub const OPENROUTER: Self = Self {
+        key: "openrouter",
+        name: "OpenRouter",
+        auth_type: "api_key",
+        provider_type: "openai",
+        default_models: &[
+            ("mistral-small", "mistralai/mistral-small-creative"),
+            ("devstral", "mistralai/devstral-2512:free"),
+            ("mimo", "xiaomi/mimo-v2-flash:free"),
+            ("grok", "x-ai/grok-4.1-fast"),
+        ],
+    };
+
+    pub fn all() -> &'static [Self] {
+        &[Self::CLAUDE_PRO_MAX, Self::ANTHROPIC, Self::OPENROUTER]
+    }
+
+    /// Get available model IDs for a provider key
+    pub fn models_for_provider(key: &str) -> Vec<String> {
+        for provider in Self::all() {
+            if provider.key == key {
+                return provider
+                    .default_models
+                    .iter()
+                    .map(|(_, id)| id.to_string())
+                    .collect();
+            }
+        }
+        vec![] // Unknown provider
+    }
+}
+
+/// Init wizard state
+pub struct InitWizard {
+    pub step: InitStep,
+    pub provider_index: usize,
+    pub api_key: TextInput,
+    pub model_alias: TextInput,
+    pub model_selector: Selector,
+    pub oauth_status: OAuthStatus,
+    pub error_message: Option<String>,
+    /// Field focus in CreateModel step: 0=alias, 1=model selector
+    pub model_focused_field: usize,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum OAuthStatus {
+    NotStarted,
+    InProgress,
+    Success,
+    Failed(String),
+}
+
+impl InitWizard {
+    pub fn new() -> Self {
+        let providers = ProviderOption::all();
+        let first_provider = &providers[0];
+        let model_options: Vec<String> = first_provider
+            .default_models
+            .iter()
+            .map(|(_, id)| id.to_string())
+            .collect();
+
+        Self {
+            step: InitStep::Welcome,
+            provider_index: 0,
+            api_key: TextInput::new().with_placeholder("Enter your API key"),
+            model_alias: TextInput::new().with_value("fast"),
+            model_selector: Selector::new(model_options),
+            oauth_status: OAuthStatus::NotStarted,
+            error_message: None,
+            model_focused_field: 0, // Start focused on alias field
+        }
+    }
+
+    pub fn selected_provider(&self) -> &'static ProviderOption {
+        &ProviderOption::all()[self.provider_index]
+    }
+
+    pub fn next_provider(&mut self) {
+        let count = ProviderOption::all().len();
+        self.provider_index = (self.provider_index + 1) % count;
+        self.update_model_options();
+    }
+
+    pub fn prev_provider(&mut self) {
+        let count = ProviderOption::all().len();
+        self.provider_index = self.provider_index.checked_sub(1).unwrap_or(count - 1);
+        self.update_model_options();
+    }
+
+    fn update_model_options(&mut self) {
+        let provider = self.selected_provider();
+        let model_options: Vec<String> = provider
+            .default_models
+            .iter()
+            .map(|(_, id)| id.to_string())
+            .collect();
+        self.model_selector = Selector::new(model_options);
+    }
+
+    pub fn selected_model(&self) -> Option<&str> {
+        self.model_selector.selected_value()
+    }
+}
+
 impl App {
-    pub fn new() -> anyhow::Result<Self> {
+    pub fn new(init_mode: bool) -> anyhow::Result<Self> {
         let (config, config_path) = load_merged_config()?;
 
-        // Start background CLI info fetch
-        let cli_info_receiver = Some(cli::fetch_cli_info_async());
+        // Start background CLI info fetch (skip in init mode)
+        let cli_info_receiver = if init_mode {
+            None
+        } else {
+            Some(cli::fetch_cli_info_async())
+        };
+
+        // Create wizard if in init mode
+        let init_wizard = if init_mode {
+            Some(InitWizard::new())
+        } else {
+            None
+        };
 
         let mut app = Self {
             section: Section::Settings,
@@ -429,9 +610,12 @@ impl App {
             cli_status: CliStatus::Loading,
             cli_info_receiver,
             needs_login_flow: false,
+            init_wizard,
         };
 
-        app.refresh_all();
+        if !init_mode {
+            app.refresh_all();
+        }
         Ok(app)
     }
 
@@ -526,6 +710,12 @@ impl App {
 
     /// Handle key events
     pub fn handle_key(&mut self, key: KeyEvent) {
+        // Handle init wizard first (takes over entire UI)
+        if self.init_wizard.is_some() {
+            self.handle_wizard_key(key);
+            return;
+        }
+
         // Handle confirm dialog first
         if self.confirm_dialog.is_some() {
             self.handle_confirm_key(key);
@@ -971,7 +1161,12 @@ impl App {
             _ => {
                 match form.focused_field {
                     0 => { form.alias.handle_key(key); }
-                    1 => { form.provider.handle_key(key); }
+                    1 => {
+                        // Update model options when provider changes
+                        if form.provider.handle_key(key) {
+                            form.update_model_options();
+                        }
+                    }
                     2 => { form.model.handle_key(key); }
                     3 => { form.set_as_default.handle_key(key); }
                     _ => {}
@@ -998,7 +1193,7 @@ impl App {
         let provider = form.selected_provider().unwrap_or_default().to_string();
         let config = ModelConfig {
             provider,
-            model: form.model.value.trim().to_string(),
+            model: form.model.selected_value().unwrap_or_default().to_string(),
             extra: std::collections::HashMap::new(),
         };
 
@@ -1206,5 +1401,207 @@ impl App {
         self.view = View::List;
         self.input_mode = InputMode::Normal;
         self.status_message = Some("Cancelled".to_string());
+    }
+
+    // Init Wizard handling
+
+    fn handle_wizard_key(&mut self, key: KeyEvent) {
+        // Esc to cancel wizard (quit with message)
+        if key.code == KeyCode::Esc {
+            self.should_quit = true;
+            return;
+        }
+
+        let wizard = match self.init_wizard.as_mut() {
+            Some(w) => w,
+            None => return,
+        };
+
+        match wizard.step {
+            InitStep::Welcome => {
+                // Any key proceeds to provider selection
+                if key.code == KeyCode::Enter {
+                    wizard.step = InitStep::SelectProvider;
+                }
+            }
+            InitStep::SelectProvider => {
+                match key.code {
+                    KeyCode::Up | KeyCode::Char('k') => wizard.prev_provider(),
+                    KeyCode::Down | KeyCode::Char('j') => wizard.next_provider(),
+                    KeyCode::Enter => {
+                        let provider = wizard.selected_provider();
+                        if provider.auth_type == "oauth" {
+                            wizard.step = InitStep::AuthenticateOAuth;
+                        } else {
+                            wizard.step = InitStep::AuthenticateApiKey;
+                        }
+                    }
+                    _ => {}
+                }
+            }
+            InitStep::AuthenticateOAuth => {
+                match key.code {
+                    KeyCode::Enter => {
+                        // Request OAuth flow through main loop
+                        self.needs_login_flow = true;
+                        wizard.oauth_status = OAuthStatus::InProgress;
+                    }
+                    KeyCode::Char('s') | KeyCode::Char('S') => {
+                        // Skip - proceed without OAuth (user can do it later)
+                        wizard.step = InitStep::CreateModel;
+                    }
+                    KeyCode::Backspace => {
+                        wizard.step = InitStep::SelectProvider;
+                        wizard.oauth_status = OAuthStatus::NotStarted;
+                    }
+                    _ => {}
+                }
+            }
+            InitStep::AuthenticateApiKey => {
+                match key.code {
+                    KeyCode::Enter => {
+                        if !wizard.api_key.value.trim().is_empty() {
+                            wizard.step = InitStep::CreateModel;
+                        } else {
+                            wizard.error_message = Some("API key is required".to_string());
+                        }
+                    }
+                    KeyCode::Backspace if wizard.api_key.value.is_empty() => {
+                        wizard.step = InitStep::SelectProvider;
+                    }
+                    _ => {
+                        wizard.api_key.handle_key(key);
+                        wizard.error_message = None;
+                    }
+                }
+            }
+            InitStep::CreateModel => {
+                match key.code {
+                    KeyCode::Tab => {
+                        // Toggle between alias (0) and model selector (1)
+                        wizard.model_focused_field = 1 - wizard.model_focused_field;
+                    }
+                    KeyCode::Enter => {
+                        if !wizard.model_alias.value.trim().is_empty() {
+                            wizard.step = InitStep::Confirm;
+                        } else {
+                            wizard.error_message = Some("Model alias is required".to_string());
+                        }
+                    }
+                    KeyCode::Esc => {
+                        // Go back to previous step
+                        let provider = wizard.selected_provider();
+                        if provider.auth_type == "oauth" {
+                            wizard.step = InitStep::AuthenticateOAuth;
+                        } else {
+                            wizard.step = InitStep::AuthenticateApiKey;
+                        }
+                    }
+                    _ => {
+                        // Handle input based on focused field
+                        if wizard.model_focused_field == 0 {
+                            // Alias field - all keys go to text input
+                            wizard.model_alias.handle_key(key);
+                            wizard.error_message = None;
+                        } else {
+                            // Model selector - j/k/up/down navigate
+                            match key.code {
+                                KeyCode::Up | KeyCode::Char('k') => {
+                                    wizard.model_selector.previous();
+                                }
+                                KeyCode::Down | KeyCode::Char('j') => {
+                                    wizard.model_selector.next();
+                                }
+                                _ => {}
+                            }
+                        }
+                    }
+                }
+            }
+            InitStep::Confirm => {
+                match key.code {
+                    KeyCode::Enter | KeyCode::Char('y') | KeyCode::Char('Y') => {
+                        self.complete_wizard();
+                    }
+                    KeyCode::Backspace | KeyCode::Char('n') | KeyCode::Char('N') => {
+                        if let Some(w) = self.init_wizard.as_mut() {
+                            w.step = InitStep::CreateModel;
+                        }
+                    }
+                    _ => {}
+                }
+            }
+        }
+    }
+
+    /// Called when OAuth flow completes (from main loop)
+    pub fn wizard_oauth_complete(&mut self, success: bool) {
+        if let Some(wizard) = self.init_wizard.as_mut() {
+            if success {
+                wizard.oauth_status = OAuthStatus::Success;
+                wizard.step = InitStep::CreateModel;
+            } else {
+                wizard.oauth_status = OAuthStatus::Failed("OAuth authentication failed".to_string());
+            }
+        }
+    }
+
+    /// Complete the wizard and save config
+    fn complete_wizard(&mut self) {
+        let wizard = match self.init_wizard.take() {
+            Some(w) => w,
+            None => return,
+        };
+
+        let provider = wizard.selected_provider();
+        let model_alias = wizard.model_alias.value.trim().to_string();
+        let model_id = wizard.selected_model().unwrap_or(provider.default_models[0].1).to_string();
+
+        // Add provider to config
+        let mut provider_config = crate::data::ProviderConfig::default();
+        provider_config.provider_type = provider.provider_type.to_string();
+
+        if provider.auth_type == "oauth" {
+            provider_config.auth_type = Some("oauth".to_string());
+        } else {
+            // For API key providers, store the actual key in config
+            let api_key = wizard.api_key.value.trim().to_string();
+            provider_config.api_key = Some(api_key);
+
+            if provider.key == "openrouter" {
+                provider_config.base_url = Some("https://openrouter.ai/api/v1".to_string());
+            }
+        }
+
+        self.config.providers.insert(provider.key.to_string(), provider_config);
+
+        // Add model to config
+        let model_config = ModelConfig {
+            provider: provider.key.to_string(),
+            model: model_id.clone(),
+            extra: std::collections::HashMap::new(),
+        };
+        self.config.models.insert(model_alias.clone(), model_config);
+
+        // Set as default model
+        self.config.default_model = model_alias.clone();
+
+        // Save config
+        match save_config(&self.config, &self.config_path) {
+            Ok(()) => {
+                self.status_message = Some(format!("Setup complete! Default model: {}", model_alias));
+            }
+            Err(e) => {
+                self.status_message = Some(format!("Setup failed: {}", e));
+            }
+        }
+
+        // Exit after setup
+        self.should_quit = true;
+    }
+
+    /// Check if we're in wizard mode
+    pub fn is_wizard_mode(&self) -> bool {
+        self.init_wizard.is_some()
     }
 }

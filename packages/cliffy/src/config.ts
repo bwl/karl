@@ -1,6 +1,7 @@
 import path from 'path';
 import { CliffyConfig, CliOptions, ProviderConfig } from './types.js';
 import { deepMerge, expandEnv, readTextIfExists, resolveHomePath } from './utils.js';
+import { loadOAuthCredentials } from './oauth.js';
 
 const DEFAULT_CONFIG: CliffyConfig = {
   defaultModel: 'fast',
@@ -136,4 +137,43 @@ export function resolveModel(config: CliffyConfig, options: CliOptions): Resolve
     providerConfig,
     modelKey
   };
+}
+
+/**
+ * Check if a provider has valid credentials
+ */
+function hasValidCredentials(providerKey: string, providerConfig: ProviderConfig): boolean {
+  if (providerConfig.authType === 'oauth') {
+    // OAuth providers: check if OAuth credentials exist
+    const oauthKey = providerKey === 'claude-pro-max' ? 'anthropic' : providerKey;
+    const creds = loadOAuthCredentials(oauthKey);
+    return creds !== null;
+  } else {
+    // API key providers: check if API key is set and expanded
+    const apiKey = providerConfig.apiKey;
+    return !!apiKey && !apiKey.includes('${');
+  }
+}
+
+/**
+ * Check if the config has at least one usable provider+model combination.
+ * Returns false if user needs to run the init wizard.
+ */
+export function isConfigValid(config: CliffyConfig): boolean {
+  // Find providers with valid credentials
+  const validProviders = new Set<string>();
+  for (const [providerKey, providerConfig] of Object.entries(config.providers)) {
+    if (hasValidCredentials(providerKey, providerConfig)) {
+      validProviders.add(providerKey);
+    }
+  }
+
+  // Check if any model uses a valid provider
+  for (const modelConfig of Object.values(config.models)) {
+    if (validProviders.has(modelConfig.provider)) {
+      return true;
+    }
+  }
+
+  return false;
 }

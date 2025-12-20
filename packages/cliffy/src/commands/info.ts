@@ -108,9 +108,18 @@ export async function getInfo(cwd: string): Promise<InfoOutput> {
   // Provider status
   const providers: InfoOutput['providers'] = {};
   for (const [name, providerConfig] of Object.entries(config.providers ?? {})) {
+    let hasAuth = checkApiKeyPresent(providerConfig.apiKey);
+
+    // Also check OAuth credentials for OAuth providers
+    if (providerConfig.authType === 'oauth') {
+      const oauthStorageKey = name === 'claude-pro-max' ? 'anthropic' : name;
+      const oauthCreds = loadOAuthCredentials(oauthStorageKey);
+      if (oauthCreds) hasAuth = true;
+    }
+
     providers[name] = {
       type: providerConfig.type ?? 'unknown',
-      has_key: checkApiKeyPresent(providerConfig.apiKey)
+      has_key: hasAuth
     };
   }
 
