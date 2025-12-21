@@ -10,6 +10,19 @@ import { homedir } from 'os';
 import { createInterface } from 'readline';
 import { loadConfig } from '../config.js';
 import { ModelConfig } from '../types.js';
+import {
+  syncRegistry,
+  getRegistry,
+  getModels,
+  mapToProvider,
+  isModelAvailableForProvider,
+  getProvidersForModel,
+  formatPricing,
+  formatContextLength,
+  isRegistryStale,
+  loadRegistry,
+  type OpenRouterModel,
+} from '../registry.js';
 
 const GLOBAL_CONFIG_PATH = join(homedir(), '.config', 'karl', 'karl.json');
 const MODELS_DIR = join(homedir(), '.config', 'karl', 'models');
@@ -197,18 +210,9 @@ export async function showModel(alias: string) {
 
 /**
  * Known provider templates with common models
+ * Note: Anthropic models are fetched dynamically from the API
  */
 const PROVIDER_MODELS: Record<string, string[]> = {
-  anthropic: [
-    'claude-sonnet-4-20250514',
-    'claude-opus-4-20250514',
-    'claude-haiku-3-5-20241022',
-  ],
-  'claude-pro-max': [
-    'claude-sonnet-4-20250514',
-    'claude-opus-4-20250514',
-    'claude-haiku-3-5-20241022',
-  ],
   openrouter: [
     'anthropic/claude-sonnet-4',
     'anthropic/claude-opus-4',
@@ -222,6 +226,19 @@ const PROVIDER_MODELS: Record<string, string[]> = {
     'o1-mini',
   ],
 };
+
+/**
+ * Map Karl provider key to OpenRouter provider prefix
+ */
+function getProviderPrefix(providerKey: string): string | undefined {
+  const mapping: Record<string, string> = {
+    'anthropic': 'anthropic',
+    'claude-pro-max': 'anthropic',
+    'openai': 'openai',
+    'openrouter': undefined as unknown as string, // No filter for openrouter
+  };
+  return mapping[providerKey];
+}
 
 export interface AddModelOptions {
   alias: string;
@@ -328,25 +345,57 @@ export async function addModel(options: AddModelOptions) {
 
     // Get model if not provided
     if (!modelId) {
-      const commonModels = PROVIDER_MODELS[providerKey] || [];
+      // Try to use the model registry
+      let registry = loadRegistry();
 
-      if (commonModels.length > 0) {
-        console.log(`\nCommon ${providerKey} models:`);
-        commonModels.forEach((m, i) => {
-          console.log(`  ${i + 1}. ${m}`);
+      if (!registry || isRegistryStale(registry)) {
+        console.log('\nSyncing model registry...');
+        try {
+          registry = await syncRegistry();
+        } catch (error) {
+          if (registry) {
+            console.log('Warning: Could not sync, using cached registry');
+          } else {
+            console.error(`\nFailed to sync registry: ${(error as Error).message}`);
+            console.error('Run `karl models sync` to fetch available models.');
+            rl.close();
+            process.exit(1);
+          }
+        }
+      }
+
+      // Filter models by provider
+      const providerPrefix = getProviderPrefix(providerKey);
+      const availableModels = registry
+        ? getModels(registry, { provider: providerPrefix }).filter(m =>
+            isModelAvailableForProvider(m, providerKey!)
+          )
+        : [];
+
+      if (availableModels.length > 0) {
+        console.log(`\nAvailable models for ${providerKey}:`);
+        const displayModels = availableModels.slice(0, 20);
+        displayModels.forEach((m, i) => {
+          console.log(`  ${i + 1}. ${m.name} (${m.id})`);
         });
+        if (availableModels.length > 20) {
+          console.log(`  ... and ${availableModels.length - 20} more (use 'karl models browse' to see all)`);
+        }
         console.log(`  Or enter a custom model ID`);
         console.log('');
 
         const modelInput = await prompt(rl, 'Model [1]: ') || '1';
         const modelIndex = parseInt(modelInput, 10);
 
-        if (modelIndex >= 1 && modelIndex <= commonModels.length) {
-          modelId = commonModels[modelIndex - 1];
+        if (modelIndex >= 1 && modelIndex <= displayModels.length) {
+          const selectedModel = displayModels[modelIndex - 1];
+          // Map to provider-specific model ID
+          modelId = mapToProvider(selectedModel.id, providerKey);
         } else {
           modelId = modelInput;
         }
       } else {
+        // No models in registry for this provider
         modelId = await prompt(rl, 'Model ID: ');
         if (!modelId) {
           console.error('Model ID is required.');
@@ -488,6 +537,102 @@ export async function refreshModels() {
 }
 
 /**
+ * Sync model registry from OpenRouter
+ */
+export async function syncModelsRegistry() {
+  console.log('Syncing models from OpenRouter...\n');
+
+  try {
+    const registry = await syncRegistry();
+    console.log(`✓ Synced ${registry.models.length} models from OpenRouter`);
+  } catch (error) {
+    console.error(`Failed to sync: ${(error as Error).message}`);
+    process.exit(1);
+  }
+}
+
+/**
+ * Parse browse command flags
+ */
+interface BrowseOptions {
+  provider?: string;
+  search?: string;
+  offline?: boolean;
+}
+
+function parseBrowseArgs(args: string[]): BrowseOptions {
+  const options: BrowseOptions = {};
+
+  for (let i = 0; i < args.length; i++) {
+    const arg = args[i];
+
+    if (arg === '--provider' || arg === '-p') {
+      options.provider = args[++i];
+    } else if (arg === '--search' || arg === '-s') {
+      options.search = args[++i];
+    } else if (arg === '--offline') {
+      options.offline = true;
+    } else if (!arg.startsWith('-')) {
+      // Backwards compat: positional arg is provider
+      options.provider = arg;
+    }
+  }
+
+  return options;
+}
+
+/**
+ * Browse available models from the registry
+ */
+export async function browseModelsFromRegistry(options: BrowseOptions) {
+  const registry = await getRegistry(options.offline);
+
+  if (!registry) {
+    console.error('No model registry found.');
+    console.error('');
+    console.error('Run `karl models sync` to fetch available models.');
+    process.exit(1);
+  }
+
+  const models = getModels(registry, {
+    provider: options.provider,
+    search: options.search,
+  });
+
+  if (models.length === 0) {
+    console.log('No models found matching your criteria.');
+    return;
+  }
+
+  console.log(`Found ${models.length} models:\n`);
+
+  for (const model of models.slice(0, 50)) {
+    const providers = getProvidersForModel(model);
+    const contextStr = formatContextLength(model.context_length);
+    const pricingStr = formatPricing(model);
+
+    console.log(`  ${model.id}`);
+    console.log(`    ${model.name} - ${contextStr} context, ${pricingStr}`);
+    console.log(`    Providers: ${providers.join(', ')}`);
+    console.log('');
+  }
+
+  if (models.length > 50) {
+    console.log(`  ... and ${models.length - 50} more`);
+    console.log('');
+    console.log('Use --search to filter results.');
+  }
+
+  // Show stale warning if applicable
+  if (isRegistryStale(registry)) {
+    const lastSyncDate = new Date(registry.lastSync).toLocaleDateString();
+    console.log(`\nRegistry last synced: ${lastSyncDate}`);
+    console.log('Run `karl models sync` to get latest models.');
+  }
+}
+
+
+/**
  * Handle models subcommands
  */
 export async function handleModelsCommand(args: string[]) {
@@ -568,6 +713,16 @@ export async function handleModelsCommand(args: string[]) {
       await refreshModels();
       break;
 
+    case 'sync':
+      await syncModelsRegistry();
+      break;
+
+    case 'browse': {
+      const browseOpts = parseBrowseArgs(rest);
+      await browseModelsFromRegistry(browseOpts);
+      break;
+    }
+
     default:
       if (!command) {
         console.error('Usage: karl models <command>');
@@ -578,10 +733,17 @@ export async function handleModelsCommand(args: string[]) {
         console.error('  add [alias]       Add a new model');
         console.error('  remove <alias>    Remove a model');
         console.error('  default <alias>   Set the default model');
+        console.error('  sync              Sync model registry from OpenRouter');
+        console.error('  browse            Browse available models');
         console.error('  refresh           Update OpenRouter model metadata');
+        console.error('');
+        console.error('Browse options:');
+        console.error('  --provider, -p    Filter by provider (anthropic, openai, etc.)');
+        console.error('  --search, -s      Search in model names/descriptions');
+        console.error('  --offline         Use cached registry without syncing');
       } else {
         console.error(`Unknown models command: ${command}`);
-        console.error('Available commands: list, show, add, remove, default, refresh');
+        console.error('Available commands: list, show, add, remove, default, sync, browse, refresh');
       }
       process.exit(1);
   }
