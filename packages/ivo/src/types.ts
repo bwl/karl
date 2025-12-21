@@ -1,0 +1,195 @@
+/**
+ * Core type definitions for Ivo - Context Intelligence Engine
+ */
+
+// ============================================================================
+// Tree Types
+// ============================================================================
+
+export interface TreeOptions {
+  /** Display mode: full tree, folders only, or selected files only */
+  mode?: 'full' | 'folders' | 'selected';
+  /** Starting path (relative or absolute) */
+  path?: string;
+  /** Maximum depth to traverse */
+  maxDepth?: number;
+}
+
+// ============================================================================
+// Search Types
+// ============================================================================
+
+export interface SearchOptions {
+  /** Search mode: auto-detect, path-only, content-only, or both */
+  mode?: 'auto' | 'path' | 'content' | 'both';
+  /** File extensions to include (e.g., ['.ts', '.tsx']) */
+  extensions?: string[];
+  /** Number of context lines around matches */
+  contextLines?: number;
+  /** Maximum number of results */
+  maxResults?: number;
+  /** Use regex pattern */
+  regex?: boolean;
+  /** Case insensitive search */
+  caseInsensitive?: boolean;
+}
+
+export interface SearchMatch {
+  path: string;
+  line: number;
+  content: string;
+  context?: {
+    before: string[];
+    after: string[];
+  };
+}
+
+export interface SearchResult {
+  pattern: string;
+  matches: SearchMatch[];
+  totalMatches: number;
+  truncated: boolean;
+}
+
+// ============================================================================
+// Structure/Codemap Types
+// ============================================================================
+
+export interface StructureOptions {
+  /** Scope: explicit paths or current selection */
+  scope?: 'paths' | 'selected';
+  /** Maximum number of codemaps to return */
+  maxResults?: number;
+}
+
+export interface CodeMap {
+  path: string;
+  language: string;
+  exports: string[];
+  classes: ClassInfo[];
+  functions: FunctionInfo[];
+  types: TypeInfo[];
+  dependencies: string[];
+}
+
+export interface ClassInfo {
+  name: string;
+  methods: string[];
+  properties: string[];
+}
+
+export interface FunctionInfo {
+  name: string;
+  signature: string;
+  async: boolean;
+}
+
+export interface TypeInfo {
+  name: string;
+  kind: 'interface' | 'type' | 'enum';
+}
+
+export interface StructureResult {
+  codemaps: CodeMap[];
+  filesWithoutCodemap: string[];
+}
+
+// ============================================================================
+// Selection Types
+// ============================================================================
+
+export type SelectionMode = 'full' | 'codemap' | 'slice';
+
+export interface SelectionFile {
+  path: string;
+  tokens: number;
+  mode: SelectionMode;
+  slices?: SliceRange[];
+}
+
+export interface SliceRange {
+  startLine: number;
+  endLine: number;
+  description?: string;
+}
+
+export interface SelectionResult {
+  files: SelectionFile[];
+  totalTokens: number;
+  prompt?: string;
+}
+
+// ============================================================================
+// Context Types
+// ============================================================================
+
+export type OutputFormat = 'xml' | 'markdown' | 'json';
+
+export interface ContextOptions {
+  /** Output format */
+  format?: OutputFormat;
+  /** Token budget limit */
+  budget?: number;
+  /** Include implementation plan */
+  includePlan?: boolean;
+  /** Response type for builder */
+  responseType?: 'plan' | 'question' | 'clarify';
+  /** What to include in context */
+  include?: ('prompt' | 'selection' | 'code' | 'files' | 'tree' | 'tokens')[];
+}
+
+export interface ContextFile {
+  path: string;
+  tokens: number;
+  mode: SelectionMode;
+  content?: string;
+  codemap?: string;
+  relevance?: number;
+}
+
+export interface ContextResult {
+  task: string;
+  files: ContextFile[];
+  totalTokens: number;
+  budget?: number;
+  plan?: string;
+  prompt?: string;
+  tree?: string;
+  chatId?: string;
+}
+
+// ============================================================================
+// Error Types
+// ============================================================================
+
+export class IvoError extends Error {
+  constructor(
+    message: string,
+    public code: string,
+    public details?: unknown
+  ) {
+    super(message);
+    this.name = 'IvoError';
+  }
+}
+
+export class BackendNotAvailableError extends IvoError {
+  constructor(backend: string, details?: string) {
+    super(
+      `Backend '${backend}' is not available. ${details || ''}`,
+      'BACKEND_NOT_AVAILABLE',
+      { backend }
+    );
+    this.name = 'BackendNotAvailableError';
+  }
+}
+
+export class RepoPromptNotRunningError extends BackendNotAvailableError {
+  constructor() {
+    super(
+      'repoprompt',
+      'Please launch RepoPrompt.app and ensure MCP Server is enabled in Settings > MCP.'
+    );
+    this.name = 'RepoPromptNotRunningError';
+  }
+}
