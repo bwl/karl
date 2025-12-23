@@ -156,6 +156,33 @@ function hasValidCredentials(providerKey: string, providerConfig: ProviderConfig
 }
 
 /**
+ * Resolve the model for agent mode.
+ * Uses agent.model if set, falls back to defaultModel.
+ */
+export function resolveAgentModel(config: KarlConfig): ResolvedModel {
+  const agentModelKey = config.agent?.model || config.defaultModel;
+
+  const modelConfig = config.models[agentModelKey] ?? Object.values(config.models)[0];
+  if (!modelConfig) {
+    throw new Error('No models configured for agent mode.');
+  }
+
+  const providerConfig = config.providers[modelConfig.provider];
+  if (!providerConfig) {
+    throw new Error(`Provider not found: ${modelConfig.provider}`);
+  }
+
+  return {
+    model: modelConfig.model,
+    providerKey: modelConfig.provider,
+    providerConfig,
+    modelKey: agentModelKey,
+    maxTokens: modelConfig.maxTokens,
+    contextLength: modelConfig.contextLength,
+  };
+}
+
+/**
  * Check if the config has at least one usable provider+model combination.
  * Returns false if user needs to run the init wizard.
  */

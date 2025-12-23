@@ -94,6 +94,11 @@ export interface StackConfig {
   unrestricted?: boolean;     // Bypass guardrails
 }
 
+export interface AgentConfig {
+  model?: string;             // Model name or alias for agent mode
+  provider?: string;          // Provider override (optional)
+}
+
 export interface KarlConfig {
   defaultModel: string;
   models: Record<string, ModelConfig>;
@@ -102,6 +107,7 @@ export interface KarlConfig {
   retry: RetryConfig;
   history?: HistoryConfig;
   stacks?: Record<string, StackConfig>;
+  agent?: AgentConfig;
 }
 
 export interface CliOptions {
@@ -123,6 +129,8 @@ export interface CliOptions {
   tags?: string[];
   noHistory?: boolean;
   background?: boolean;       // Run in background, return job ID
+  plain?: boolean;
+  visuals?: string;
 }
 
 export interface ToolDiff {
