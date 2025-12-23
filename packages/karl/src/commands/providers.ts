@@ -51,6 +51,15 @@ const PROVIDER_TEMPLATES: Record<string, {
     envVar: 'OPENAI_API_KEY',
     description: 'OpenAI API',
   },
+  antigravity: {
+    type: 'openai',
+    config: {
+      type: 'openai',
+      baseUrl: 'http://localhost:8317/v1',
+      apiKey: 'not-needed',
+    },
+    description: 'Antigravity local API server (no auth required)',
+  },
 };
 
 /**

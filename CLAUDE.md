@@ -57,6 +57,41 @@ karl models add                  # Add a new model
 karl models default haiku        # Set default model
 ```
 
+## Local Development with Antigravity
+
+Antigravity is a local API server that proxies to various models through your antigravity account. It provides an OpenAI-compatible API with no authentication required.
+
+**Setup**:
+
+```bash
+# Add the provider
+karl providers add antigravity
+
+# Add models (examples)
+karl models add ag-sonnet antigravity/gemini-claude-sonnet-4-5
+karl models add ag-flash antigravity/gemini-2.5-flash
+
+# Use with karl
+karl run --model ag-flash "your task"
+```
+
+**Available models** (at http://localhost:8317):
+- gemini-claude-sonnet-4-5
+- gemini-claude-opus-4-5-thinking
+- gemini-2.5-flash
+- gemini-2.5-pro
+- gpt-oss-120b-medium
+- gemini-3-pro-preview
+- gemini-3-flash-preview
+- gemini-2.5-computer-use-preview-10-2025
+- gemini-3-pro-image-preview
+- gemini-2.5-flash-lite
+
+**Check available models**:
+```bash
+curl http://localhost:8317/v1/models | jq '.data[].id'
+```
+
 ## Agent Skills
 
 Karl supports the [Agent Skills](https://agentskills.io) open standard.

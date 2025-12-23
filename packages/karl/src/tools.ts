@@ -1,12 +1,35 @@
 import path from 'path';
 import { promises as fs } from 'fs';
-import { Type, type Static, type TSchema } from '@sinclair/typebox';
 import { pathToFileURL } from 'url';
 import { HookRunner } from './hooks.js';
 import type { SchedulerEvent, ToolDiff } from './types.js';
 import { ensureDir, formatError, pathExists, resolveHomePath } from './utils.js';
 
-// Types matching pi-agent-core/pi-ai
+// Tool parameter interfaces
+interface BashParams {
+  command: string;
+  cwd?: string;
+  env?: Record<string, string>;
+}
+
+interface ReadParams {
+  path: string;
+  offset?: number;
+  limit?: number;
+}
+
+interface WriteParams {
+  path: string;
+  content: string;
+}
+
+interface EditParams {
+  path: string;
+  oldText: string;
+  newText: string;
+}
+
+// Types for tool results
 interface TextContent {
   type: 'text';
   text: string;
@@ -22,14 +45,23 @@ interface AgentToolResult<T = any> {
   details: T;
 }
 
-interface AgentTool<TParameters extends TSchema = TSchema, TDetails = any> {
+// JSON Schema type
+type JSONSchema = {
+  type: string;
+  properties?: Record<string, any>;
+  required?: string[];
+  description?: string;
+  additionalProperties?: boolean;
+};
+
+interface AgentTool<TParams = any, TDetails = any> {
   name: string;
   label: string;
   description: string;
-  parameters: TParameters;
+  parameters: JSONSchema;
   execute: (
     toolCallId: string,
-    params: Static<TParameters>,
+    params: TParams,
     signal?: AbortSignal,
     onUpdate?: (partialResult: AgentToolResult<TDetails>) => void
   ) => Promise<AgentToolResult<TDetails>>;
@@ -334,37 +366,53 @@ export async function loadCustomTools(patterns: string[], ctx: ToolContext): Pro
   return tools;
 }
 
-// Schemas
-const bashSchema = Type.Object({
-  command: Type.String({ description: 'Shell command to execute' }),
-  cwd: Type.Optional(Type.String({ description: 'Working directory override' })),
-  env: Type.Optional(Type.Record(Type.String(), Type.String(), { description: 'Environment overrides' }))
-});
+// Plain JSON Schemas (no TypeBox)
+const bashSchema: JSONSchema = {
+  type: 'object',
+  properties: {
+    command: { type: 'string', description: 'Shell command to execute' },
+    cwd: { type: 'string', description: 'Working directory override' },
+    env: { type: 'object', description: 'Environment overrides' }
+  },
+  required: ['command']
+};
 
-const readSchema = Type.Object({
-  path: Type.String({ description: 'File path' }),
-  offset: Type.Optional(Type.Number({ description: 'Byte offset to start reading from' })),
-  limit: Type.Optional(Type.Number({ description: 'Max bytes to read' }))
-});
+const readSchema: JSONSchema = {
+  type: 'object',
+  properties: {
+    path: { type: 'string', description: 'File path' },
+    offset: { type: 'number', description: 'Byte offset to start reading from' },
+    limit: { type: 'number', description: 'Max bytes to read' }
+  },
+  required: ['path']
+};
 
-const writeSchema = Type.Object({
-  path: Type.String({ description: 'File path' }),
-  content: Type.String({ description: 'File contents' })
-});
+const writeSchema: JSONSchema = {
+  type: 'object',
+  properties: {
+    path: { type: 'string', description: 'File path' },
+    content: { type: 'string', description: 'File contents' }
+  },
+  required: ['path', 'content']
+};
 
-const editSchema = Type.Object({
-  path: Type.String({ description: 'File path' }),
-  oldText: Type.String({ description: 'Exact text to find' }),
-  newText: Type.String({ description: 'Replacement text' })
-});
+const editSchema: JSONSchema = {
+  type: 'object',
+  properties: {
+    path: { type: 'string', description: 'File path' },
+    oldText: { type: 'string', description: 'Exact text to find' },
+    newText: { type: 'string', description: 'Replacement text' }
+  },
+  required: ['path', 'oldText', 'newText']
+};
 
 export async function createBuiltinTools(ctx: ToolContext): Promise<AgentTool[]> {
-  const bash: AgentTool<typeof bashSchema> = {
+  const bash: AgentTool<BashParams> = {
     name: 'bash',
     label: 'bash',
     description: 'Execute shell commands. Returns stdout, stderr, and exit code.',
     parameters: bashSchema,
-    execute: wrapExecute(
+    execute: wrapExecute<BashParams, any>(
       'bash',
       async (params) => {
         const runCwd = params.cwd ? path.resolve(ctx.cwd, params.cwd) : ctx.cwd;
@@ -376,14 +424,14 @@ export async function createBuiltinTools(ctx: ToolContext): Promise<AgentTool[]>
     )
   };
 
-  const read: AgentTool<typeof readSchema, any> = {
+  const read: AgentTool<ReadParams> = {
     name: 'read',
     label: 'read',
     description: 'Read file contents. Returns text for text files, base64 for binary/images.',
     parameters: readSchema,
-    execute: wrapExecute<Static<typeof readSchema>, any>(
+    execute: wrapExecute<ReadParams, any>(
       'read',
-      async (params): Promise<AgentToolResult<any>> => {
+      async (params) => {
         const resolved = path.isAbsolute(params.path) ? params.path : path.join(ctx.cwd, params.path);
         const offset = params.offset ?? 0;
         const buffer = await loadFileSlice(resolved, offset, params.limit);
@@ -411,12 +459,12 @@ export async function createBuiltinTools(ctx: ToolContext): Promise<AgentTool[]>
     )
   };
 
-  const write: AgentTool<typeof writeSchema> = {
+  const write: AgentTool<WriteParams> = {
     name: 'write',
     label: 'write',
     description: 'Create or overwrite a file. Creates parent directories if needed.',
     parameters: writeSchema,
-    execute: wrapExecute(
+    execute: wrapExecute<WriteParams, any>(
       'write',
       async (params) => {
         const resolved = path.isAbsolute(params.path) ? params.path : path.join(ctx.cwd, params.path);
@@ -459,12 +507,12 @@ export async function createBuiltinTools(ctx: ToolContext): Promise<AgentTool[]>
     )
   };
 
-  const edit: AgentTool<typeof editSchema> = {
+  const edit: AgentTool<EditParams> = {
     name: 'edit',
     label: 'edit',
     description: 'Edit a file by replacing exact text. oldText must match exactly.',
     parameters: editSchema,
-    execute: wrapExecute(
+    execute: wrapExecute<EditParams, any>(
       'edit',
       async (params) => {
         const resolved = path.isAbsolute(params.path) ? params.path : path.join(ctx.cwd, params.path);
@@ -507,6 +555,5 @@ export async function createBuiltinTools(ctx: ToolContext): Promise<AgentTool[]>
     )
   };
 
-  // Cast to any[] to avoid TypeScript issues with heterogeneous tool parameter types
-  return [bash, read, write, edit] as AgentTool<any, any>[];
+  return [bash, read, write, edit];
 }

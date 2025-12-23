@@ -315,7 +315,7 @@ CREATE INDEX IF NOT EXISTS idx_run_tags_tag ON run_tags(tag);
 
   listRuns(options: HistoryListOptions = {}): HistoryRunSummary[] {
     const where: string[] = [];
-    const params: unknown[] = [];
+    const params: (string | number)[] = [];
     let sql = `
       SELECT r.id, r.created_at, r.status, r.prompt, r.model_key, r.stack, r.skill, r.duration_ms
       FROM runs r
@@ -367,7 +367,7 @@ CREATE INDEX IF NOT EXISTS idx_run_tags_tag ON run_tags(tag);
     sql += ' LIMIT ?';
     params.push(limit);
 
-    const rows = this.db.query(sql).all(params) as Array<{
+    const rows = this.db.query(sql).all(...params) as Array<{
       id: string;
       created_at: number;
       status: 'success' | 'error';

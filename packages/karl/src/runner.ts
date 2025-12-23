@@ -1,21 +1,15 @@
-import { agentLoop, getModel, setApiKey } from '@mariozechner/pi-ai';
+/**
+ * Task Runner
+ *
+ * Runs a single task using the custom agent loop.
+ */
+
+import { agentLoop, type AgentLoopConfig, type ToolDefinition, type AgentEvent } from './agent-loop.js';
 import { createBuiltinTools, loadCustomTools } from './tools.js';
 import { HookRunner } from './hooks.js';
 import type { SchedulerEvent, TaskResult, TokenUsage, ToolDiff, ToolsConfig } from './types.js';
 import { formatError } from './utils.js';
 import { TaskRunError, TimeoutError } from './errors.js';
-
-/**
- * Map karl provider keys to pi-ai provider names
- * karl uses provider names from config (e.g., "claude-pro-max")
- * pi-ai uses standard provider names (e.g., "anthropic")
- */
-function mapToPiAiProvider(providerKey: string): string {
-  const mapping: Record<string, string> = {
-    'claude-pro-max': 'anthropic',
-  };
-  return mapping[providerKey] ?? providerKey;
-}
 
 export interface RunTaskParams {
   task: string;
@@ -24,6 +18,7 @@ export interface RunTaskParams {
   cwd: string;
   model: string;
   providerKey: string;
+  providerType?: string;
   apiKey: string;
   baseUrl?: string;
   systemPrompt: string;
@@ -33,6 +28,7 @@ export interface RunTaskParams {
   unrestricted?: boolean;
   timeoutMs?: number;
   maxTokens?: number;
+  maxToolRounds?: number;
   contextLength?: number;
   onEvent?: (event: SchedulerEvent) => void;
   onDiff?: (diff: ToolDiff) => void;
@@ -46,7 +42,6 @@ function extractTokens(usage: any): TokenUsage | undefined {
   const input = usage.input ?? usage.inputTokens ?? usage.prompt_tokens;
   const output = usage.output ?? usage.outputTokens ?? usage.completion_tokens;
   const total = usage.total ?? usage.totalTokens;
-  // Cost might be an object with total, or a number directly
   const costValue = typeof usage.cost === 'object' ? usage.cost?.total : usage.cost;
   if (input === undefined && output === undefined && total === undefined && costValue === undefined) {
     return undefined;
@@ -57,7 +52,7 @@ function extractTokens(usage: any): TokenUsage | undefined {
 async function runWithTimeout<T>(
   promise: Promise<T>,
   timeoutMs?: number,
-  controller?: AbortController | null
+  onTimeout?: () => void
 ): Promise<T> {
   if (!timeoutMs) {
     return await promise;
@@ -65,7 +60,7 @@ async function runWithTimeout<T>(
   let timeoutId: ReturnType<typeof setTimeout> | null = null;
   const timeoutPromise = new Promise<T>((_, reject) => {
     timeoutId = setTimeout(() => {
-      controller?.abort();
+      onTimeout?.();
       reject(new TimeoutError(`Task timed out after ${timeoutMs}ms`));
     }, timeoutMs);
   });
@@ -76,6 +71,18 @@ async function runWithTimeout<T>(
       clearTimeout(timeoutId);
     }
   }
+}
+
+/**
+ * Adapt Karl's tool format to the agent loop's ToolDefinition format.
+ */
+function adaptTools(karlTools: any[]): ToolDefinition[] {
+  return karlTools.map(tool => ({
+    name: tool.name,
+    description: tool.description,
+    parameters: tool.parameters,
+    execute: tool.execute
+  }));
 }
 
 export async function runTask(params: RunTaskParams): Promise<TaskResult> {
@@ -110,139 +117,116 @@ export async function runTask(params: RunTaskParams): Promise<TaskResult> {
       diffConfig: params.diffConfig
     };
 
-    let tools: any[] = [];
+    let tools: ToolDefinition[] = [];
     if (!params.noTools) {
       const builtinTools = await createBuiltinTools(ctx);
       const enabled = new Set(params.toolsConfig.enabled ?? []);
       const filteredBuiltins =
         params.toolsConfig.enabled.length > 0 ? builtinTools.filter((tool) => enabled.has(tool.name)) : builtinTools;
       const customTools = await loadCustomTools(params.toolsConfig.custom ?? [], ctx);
-      tools = [...filteredBuiltins, ...customTools];
+      tools = adaptTools([...filteredBuiltins, ...customTools]);
     }
 
-    // Map provider key to pi-ai provider name
-    const piAiProvider = mapToPiAiProvider(params.providerKey);
+    // Validate we have a base URL
+    if (!params.baseUrl) {
+      throw new Error(`No baseUrl configured for provider: ${params.providerKey}`);
+    }
 
-    // Set API key for the provider (cast to any since pi-ai uses strict provider types)
-    setApiKey(piAiProvider as any, params.apiKey);
-
-    // Get model config from pi-ai
-    // For custom models not in pi-ai registry, use config metadata or sensible defaults
-    const baseModel = getModel(piAiProvider as any, params.model);
-
-    // Determine API format based on provider
-    // pi-ai expects: "anthropic-messages", "openai-completions", "openai-responses", "google-generative-ai"
-    const apiFormat = (piAiProvider === 'anthropic') ? 'anthropic-messages' : 'openai-completions';
-
-    const model = {
-      ...baseModel,
-      id: baseModel?.id ?? params.model,
-      provider: baseModel?.provider ?? piAiProvider,
-      api: baseModel?.api ?? apiFormat,
-      baseUrl: baseModel?.baseUrl ?? params.baseUrl,
-      maxTokens: baseModel?.maxTokens || params.maxTokens || 8192,
-      contextLength: baseModel?.contextLength || params.contextLength || 128000,
-    };
-
-    // Build context
-    const context = {
-      systemPrompt: params.systemPrompt,
-      messages: [] as any[],
-      tools
-    };
-
-    // Build user message
-    const userMessage = {
-      role: 'user' as const,
-      content: params.task,
-      timestamp: Date.now()
-    };
-
-    // Config for agent loop
-    const loopConfig = {
-      model,
-      apiKey: params.apiKey
+    // Build agent loop config
+    const config: AgentLoopConfig = {
+      model: params.model,
+      baseUrl: params.baseUrl,
+      apiKey: params.apiKey,
+      maxTokens: params.maxTokens,
+      maxToolRounds: params.maxToolRounds ?? 50,
+      signal: params.timeoutMs ? new AbortController().signal : undefined
     };
 
     const controller = params.timeoutMs ? new AbortController() : null;
+    if (controller) {
+      config.signal = controller.signal;
+    }
 
     // Run agent loop
     const runPromise = (async () => {
       let finalText = '';
-      let finalUsage: any = null;
+      let finalUsage: TokenUsage | undefined;
 
-      for await (const event of agentLoop(userMessage, context, loopConfig, controller?.signal)) {
-        switch (event.type) {
+      const loop = agentLoop(params.systemPrompt, params.task, tools, config);
+
+      while (true) {
+        const { value: event, done } = await loop.next();
+
+        if (done) {
+          // Generator returned final result
+          const result = event as { message: any; usage: TokenUsage };
+          finalUsage = result.usage;
+          break;
+        }
+
+        // Handle events
+        const agentEvent = event as AgentEvent;
+
+        switch (agentEvent.type) {
+          case 'text_delta':
+            // Emit text as it streams (for thinking display)
+            onEvent({
+              type: 'thinking',
+              taskIndex: params.index,
+              text: agentEvent.delta,
+              time: Date.now()
+            });
+            break;
+
+          case 'text_end':
+            finalText = agentEvent.text;
+            break;
+
           case 'tool_execution_start':
             onEvent({
               type: 'tool_start',
               taskIndex: params.index,
-              tool: event.toolName,
+              tool: agentEvent.toolName,
               time: Date.now()
             });
             break;
+
           case 'tool_execution_end':
-            toolsUsed.add(event.toolName);
+            toolsUsed.add(agentEvent.toolName);
             onEvent({
               type: 'tool_end',
               taskIndex: params.index,
-              tool: event.toolName,
+              tool: agentEvent.toolName,
               time: Date.now(),
-              success: !event.isError
+              success: !agentEvent.isError
             });
             break;
-          case 'message_update':
-            // Emit thinking text as it streams
-            if (event.message?.role === 'assistant') {
-              const content = event.message.content;
-              let text = '';
-              if (typeof content === 'string') {
-                text = content;
-              } else if (Array.isArray(content)) {
-                text = content
-                  .filter((c: any) => c.type === 'text')
-                  .map((c: any) => c.text)
-                  .join('\n');
-              }
-              if (text) {
-                onEvent({
-                  type: 'thinking',
-                  taskIndex: params.index,
-                  text,
-                  time: Date.now()
-                });
-              }
-            }
-            break;
+
           case 'message_end':
-            if (event.message.role === 'assistant') {
-              const content = event.message.content;
-              if (typeof content === 'string') {
-                finalText = content;
-              } else if (Array.isArray(content)) {
-                const textParts = content
-                  .filter((c: any) => c.type === 'text')
-                  .map((c: any) => c.text);
-                if (textParts.length > 0) {
-                  finalText = textParts.join('\n');
-                }
-              }
+            // Extract final text from message if not already set
+            if (!finalText && agentEvent.message.content) {
+              finalText = agentEvent.message.content;
             }
             break;
+
           case 'turn_end':
-            // Usage might be on the message or the event itself
-            const usage = (event as any).usage ?? event.message?.usage;
-            if (usage) {
-              finalUsage = usage;
-            }
+            finalUsage = agentEvent.usage;
             break;
+
+          case 'error':
+            throw agentEvent.error;
         }
       }
 
       return { text: finalText, usage: finalUsage };
     })();
 
-    const result = await runWithTimeout(runPromise, params.timeoutMs, controller);
+    const result = await runWithTimeout(
+      runPromise,
+      params.timeoutMs,
+      () => controller?.abort()
+    );
+
     const tokens = extractTokens(result.usage);
     const durationMs = Date.now() - startTime;
 

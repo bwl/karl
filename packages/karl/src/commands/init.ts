@@ -45,6 +45,21 @@ const PROVIDER_TEMPLATES: Record<string, { type: string; config: Partial<Provide
     models: ['gpt-4o', 'gpt-4o-mini', 'o1', 'o1-mini'],
     envVar: 'OPENAI_API_KEY',
   },
+  antigravity: {
+    type: 'openai',
+    config: {
+      type: 'openai',
+      baseUrl: 'http://localhost:8317/v1',
+      apiKey: 'not-needed',
+    },
+    models: [
+      'gemini-claude-sonnet-4-5',
+      'gemini-claude-opus-4-5-thinking',
+      'gemini-2.5-flash',
+      'gemini-2.5-pro',
+      'gpt-oss-120b-medium',
+    ],
+  },
 };
 
 function prompt(rl: ReturnType<typeof createInterface>, question: string): Promise<string> {

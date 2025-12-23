@@ -101,7 +101,7 @@ export function launchBackgroundJob(
 
   // Unref so parent can exit
   child.unref();
-  outputStream.unref?.();
+  (outputStream as any).unref?.();
 
   return { jobId, pid: child.pid! };
 }
