@@ -9,6 +9,7 @@ import { homedir } from 'os';
 
 export interface SkillsListOptions {
   verbose?: boolean;
+  namesOnly?: boolean;  // For shell completion
 }
 
 export interface SkillsValidateOptions {
@@ -29,6 +30,14 @@ export interface SkillsCreateOptions {
 export async function listSkills(options: SkillsListOptions = {}) {
   const skills = await skillManager.listSkills();
 
+  // Names-only mode for shell completion
+  if (options.namesOnly) {
+    for (const skill of skills) {
+      console.log(skill.name);
+    }
+    return;
+  }
+
   if (skills.length === 0) {
     console.log('No skills found. Create skills in ~/.config/karl/skills/ or ./.karl/skills/');
     return;
@@ -42,8 +51,8 @@ export async function listSkills(options: SkillsListOptions = {}) {
       console.log(`  ${skill.description}`);
       console.log(`  Location: ${skill.path}\n`);
     } else {
-      const truncatedDesc = skill.description.length > 80 
-        ? skill.description.substring(0, 77) + '...' 
+      const truncatedDesc = skill.description.length > 80
+        ? skill.description.substring(0, 77) + '...'
         : skill.description;
       console.log(`◍ ${skill.name.padEnd(20)} ${truncatedDesc}`);
     }
@@ -352,10 +361,12 @@ export async function handleSkillsCommand(args: string[]) {
 
   switch (command) {
     case 'list':
-    case 'ls':
+    case 'ls': {
       const verbose = rest.includes('--verbose') || rest.includes('-v');
-      await listSkills({ verbose });
+      const namesOnly = rest.includes('--names');
+      await listSkills({ verbose, namesOnly });
       break;
+    }
 
     case 'show':
     case 'info':

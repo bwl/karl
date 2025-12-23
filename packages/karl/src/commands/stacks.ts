@@ -46,6 +46,7 @@ function formatDuration(ms: number): string {
 
 export interface StacksListOptions {
   verbose?: boolean;
+  namesOnly?: boolean;  // For shell completion
 }
 
 /**
@@ -56,6 +57,14 @@ export async function listStacks(options: StacksListOptions = {}) {
   const config = await loadConfig(cwd);
   const manager = new StackManager(config);
   const stacks = await manager.listStacks();
+
+  // Names-only mode for shell completion
+  if (options.namesOnly) {
+    for (const stack of stacks) {
+      console.log(stack.name);
+    }
+    return;
+  }
 
   if (stacks.length === 0) {
     console.log('No stacks found.');
@@ -278,7 +287,8 @@ export async function handleStacksCommand(args: string[]) {
     case 'list':
     case 'ls':
       const verbose = rest.includes('--verbose') || rest.includes('-v');
-      await listStacks({ verbose });
+      const namesOnly = rest.includes('--names');
+      await listStacks({ verbose, namesOnly });
       break;
 
     case 'show':

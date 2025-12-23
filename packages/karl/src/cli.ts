@@ -50,8 +50,11 @@ const BUILTIN_COMMANDS = new Set([
   'last',      // Alias for previous
   'tldr',      // Quick reference primer
   'help',      // Alias for tldr
-  'as',        // Legacy stack syntax
-  'agent',     // Launch Claude Code with Karl-only tools
+  'agent',     // Interactive orchestrator REPL
+  'claude',    // Launch Claude Code with Karl-only tools
+  'debugdesign', // UI simulation for design work
+  'dd',        // Alias for debugdesign
+  'completions', // Shell completion scripts
 ]);
 
 /**
@@ -233,7 +236,8 @@ Commands:
   history                   Show run history
   jobs                      List background jobs
   previous                  Print last response (aliases: prev, last)
-  agent                     Launch Claude Code with Karl-only access
+  agent                     Interactive orchestrator (runs karl commands)
+  claude                    Launch Claude Code with Karl-only access
 
 Flags:
   --help, -h           Show full help
@@ -290,7 +294,8 @@ Built-in Commands:
   info                      Show system info (alias: status)
   history                   Show run history (alias: logs)
   previous                  Print last response (aliases: prev, last)
-  agent                     Launch Claude Code with Karl-only access
+  agent                     Interactive orchestrator (runs karl commands)
+  claude                    Launch Claude Code with Karl-only access
 ${stackVerbs}
 Flags (use with 'run'):
   --model, -m          Model alias or exact model id
@@ -463,6 +468,12 @@ function parseArgs(argv: string[]): { options: CliOptions; tasks: (string | null
       }
       case '--no-history':
         options.noHistory = true;
+        break;
+      case '--plain':
+        options.plain = true;
+        break;
+      case '--visuals':
+        options.visuals = requireValue(flag, inlineValue ?? argv[++i]);
         break;
       case '--background':
       case '-bg':
@@ -695,18 +706,33 @@ async function main() {
     await handleTldrCommand(args.slice(1));
     return;
   }
-  // Handle 'agent' command - launch Claude Code with Karl-only tools
+  // Handle 'agent' command - interactive orchestrator REPL
   else if (firstArg === 'agent') {
-    const { handleAgentCommand } = await import('./commands/agent.js');
-    await handleAgentCommand(args.slice(1));
+    const agentArgs = args.slice(1);
+    const { options: agentOptions } = parseArgs(agentArgs);
+    const agentCwd = process.cwd();
+    const config = await loadConfig(agentCwd);
+    const { handleAgentRepl } = await import('./commands/agent-repl.js');
+    await handleAgentRepl(config, { plain: agentOptions.plain, visuals: agentOptions.visuals });
     return;
   }
-  // Handle legacy 'as <stack>' syntax
-  else if (firstArg === 'as' && args.length >= 2) {
-    const stackName = args[1];
-    args = args.slice(2);
-    // Inject stack into args for parseArgs
-    args = ['--stack', stackName, ...args];
+  // Handle 'claude' command - launch Claude Code with Karl-only tools
+  else if (firstArg === 'claude') {
+    const { handleClaudeCommand } = await import('./commands/claude.js');
+    await handleClaudeCommand(args.slice(1));
+    return;
+  }
+  // Handle 'debugdesign' command - UI simulation for design work
+  else if (firstArg === 'debugdesign' || firstArg === 'dd') {
+    const { handleDebugDesign } = await import('./commands/debugdesign.js');
+    await handleDebugDesign(args.slice(1));
+    return;
+  }
+  // Handle 'completions' command - shell completion scripts
+  else if (firstArg === 'completions') {
+    const { handleCompletionsCommand } = await import('./commands/completions.js');
+    await handleCompletionsCommand(args.slice(1));
+    return;
   }
   // ─────────────────────────────────────────────────────────────────────────
   // STACK-AS-VERB: Check if first arg is a known stack
@@ -992,8 +1018,9 @@ async function main() {
   };
 
   const state = initState([finalTask]);
+  const visualsOverride = effectiveOptions.plain ? 'plain' : effectiveOptions.visuals || undefined;
   const useVerbose = effectiveOptions.verbose && !effectiveOptions.json;
-  const spinner = new Spinner(!effectiveOptions.json, useVerbose);
+  const spinner = new Spinner(!effectiveOptions.json, useVerbose, visualsOverride);
   const statusWriter = new StatusWriter(cwd, finalTask, historyId);
   const onEvent = (event: SchedulerEvent) => {
     applyEvent(state, event);

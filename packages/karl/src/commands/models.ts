@@ -153,13 +153,25 @@ function prompt(rl: ReturnType<typeof createInterface>, question: string): Promi
   });
 }
 
+export interface ListModelsOptions {
+  namesOnly?: boolean;  // For shell completion
+}
+
 /**
  * List all configured models
  */
-export async function listModels() {
+export async function listModels(options: ListModelsOptions = {}) {
   const cwd = process.cwd();
   const config = await loadConfig(cwd);
   const entries = Object.entries(config.models ?? {});
+
+  // Names-only mode for shell completion
+  if (options.namesOnly) {
+    for (const [alias] of entries) {
+      console.log(alias);
+    }
+    return;
+  }
 
   if (entries.length === 0) {
     console.log('No models configured.');
@@ -640,9 +652,11 @@ export async function handleModelsCommand(args: string[]) {
 
   switch (command) {
     case 'list':
-    case 'ls':
-      await listModels();
+    case 'ls': {
+      const namesOnly = rest.includes('--names');
+      await listModels({ namesOnly });
       break;
+    }
 
     case 'show':
     case 'info':
