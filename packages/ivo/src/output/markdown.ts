@@ -137,6 +137,20 @@ export function formatMarkdown(result: ContextResult): string {
     lines.push('');
   }
 
+  // History
+  if (result.history) {
+    lines.push('## History');
+    lines.push('');
+    lines.push(`- **Source**: ${result.history.source}`);
+    lines.push(`- **Mode**: ${result.history.mode}`);
+    lines.push(`- **Entries**: ${result.history.entries.length}`);
+    lines.push('');
+    lines.push('```json');
+    lines.push(JSON.stringify(result.history.entries, null, 2));
+    lines.push('```');
+    lines.push('');
+  }
+
   // Directory structure
   if (result.tree) {
     lines.push('## Directory Structure');

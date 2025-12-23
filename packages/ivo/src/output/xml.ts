@@ -98,6 +98,16 @@ export function formatXml(result: ContextResult): string {
     lines.push('  </prompt>');
   }
 
+  // History
+  if (result.history) {
+    lines.push('  <history>');
+    lines.push(`    <source>${escapeXml(result.history.source)}</source>`);
+    lines.push(`    <mode>${escapeXml(result.history.mode)}</mode>`);
+    const historyPayload = JSON.stringify(result.history.entries, null, 2);
+    lines.push(`    <entries>${wrapContent(historyPayload)}</entries>`);
+    lines.push('  </history>');
+  }
+
   // Directory structure
   if (result.tree) {
     lines.push('  <directory_structure>');

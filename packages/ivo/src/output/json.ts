@@ -39,6 +39,7 @@ export function formatJson(result: ContextResult, pretty: boolean = true): strin
     })),
     plan: result.plan,
     chatId: result.chatId,
+    history: result.history,
   };
 
   // Remove undefined values
