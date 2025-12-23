@@ -182,25 +182,7 @@ export async function runTask(params: RunTaskParams): Promise<TaskResult> {
             finalText = agentEvent.text;
             break;
 
-          case 'tool_execution_start':
-            onEvent({
-              type: 'tool_start',
-              taskIndex: params.index,
-              tool: agentEvent.toolName,
-              time: Date.now()
-            });
-            break;
 
-          case 'tool_execution_end':
-            toolsUsed.add(agentEvent.toolName);
-            onEvent({
-              type: 'tool_end',
-              taskIndex: params.index,
-              tool: agentEvent.toolName,
-              time: Date.now(),
-              success: !agentEvent.isError
-            });
-            break;
 
           case 'message_end':
             // Extract final text from message if not already set
