@@ -5,6 +5,7 @@ interface PrintOptions {
   json?: boolean;
   verbose?: boolean;
   stats?: boolean;
+  historyId?: string;
 }
 
 function sumTokens(results: TaskResult[]): TokenUsage | undefined {
@@ -71,7 +72,8 @@ export function printResults(results: TaskResult[], options: PrintOptions): void
         duration_ms: result.durationMs,
         tools_used: result.toolsUsed
       })),
-      summary
+      summary,
+      history_id: options.historyId
     };
     console.log(JSON.stringify(payload, null, 2));
     return;

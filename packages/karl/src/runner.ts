@@ -1,7 +1,7 @@
 import { agentLoop, getModel, setApiKey } from '@mariozechner/pi-ai';
 import { createBuiltinTools, loadCustomTools } from './tools.js';
 import { HookRunner } from './hooks.js';
-import { SchedulerEvent, TaskResult, TokenUsage, ToolsConfig } from './types.js';
+import type { SchedulerEvent, TaskResult, TokenUsage, ToolDiff, ToolsConfig } from './types.js';
 import { formatError } from './utils.js';
 import { TaskRunError, TimeoutError } from './errors.js';
 
@@ -35,6 +35,8 @@ export interface RunTaskParams {
   maxTokens?: number;
   contextLength?: number;
   onEvent?: (event: SchedulerEvent) => void;
+  onDiff?: (diff: ToolDiff) => void;
+  diffConfig?: { maxBytes?: number; maxLines?: number };
 }
 
 function extractTokens(usage: any): TokenUsage | undefined {
@@ -103,7 +105,9 @@ export async function runTask(params: RunTaskParams): Promise<TaskResult> {
       onEvent,
       task: params.task,
       taskIndex: params.index,
-      unrestricted: params.unrestricted
+      unrestricted: params.unrestricted,
+      onDiff: params.onDiff,
+      diffConfig: params.diffConfig
     };
 
     let tools: any[] = [];

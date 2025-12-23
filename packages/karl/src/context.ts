@@ -7,7 +7,8 @@ const BASE_GUARDRAILS = `You are a helpful coding assistant. Follow these guidel
 - Only modify files within the current working directory unless explicitly asked otherwise
 - Before running destructive commands (rm, overwrite, etc.), confirm the intent
 - Prefer reading files before editing to understand context
-- Keep changes minimal and focused on the task at hand`;
+- Keep changes minimal and focused on the task at hand
+- If a prior run history is provided, use it as continuity context (previous response, diffs)`;
 
 const CONTEXT_FILES = [
   'CLAUDE.md',

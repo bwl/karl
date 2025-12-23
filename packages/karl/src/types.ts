@@ -69,10 +69,16 @@ export interface ToolsConfig {
   custom: string[];
 }
 
-export interface VolleyConfig {
-  maxConcurrent: number;
-  retryAttempts: number;
-  retryBackoff: 'exponential' | 'linear';
+export interface RetryConfig {
+  attempts: number;
+  backoff: 'exponential' | 'linear';
+}
+
+export interface HistoryConfig {
+  enabled?: boolean;
+  path?: string;
+  maxDiffBytes?: number;
+  maxDiffLines?: number;
 }
 
 export interface StackConfig {
@@ -93,7 +99,8 @@ export interface KarlConfig {
   models: Record<string, ModelConfig>;
   providers: Record<string, ProviderConfig>;
   tools: ToolsConfig;
-  volley: VolleyConfig;
+  retry: RetryConfig;
+  history?: HistoryConfig;
   stacks?: Record<string, StackConfig>;
 }
 
@@ -102,26 +109,30 @@ export interface CliOptions {
   verbose?: boolean;
   json?: boolean;
   stats?: boolean;
-  maxConcurrent?: number;
   timeoutMs?: number;
   skill?: string;
   noTools?: boolean;
   unrestricted?: boolean;
   context?: string;
   contextFile?: string;
-  tasksFile?: string;
   stack?: string;             // Config stack name (via "as" syntax)
   temperature?: number;       // Temperature override
   maxTokens?: number;         // Max tokens override
   dryRun?: boolean;           // Show config without running
-  volley?: boolean;           // Enable multi-task mode
+  parent?: string;
+  tags?: string[];
+  noHistory?: boolean;
+  background?: boolean;       // Run in background, return job ID
 }
 
-export interface SchedulerOptions {
-  maxConcurrent: number;
-  retryAttempts: number;
-  retryBackoff: 'exponential' | 'linear';
-  timeoutMs?: number;
+export interface ToolDiff {
+  path: string;
+  tool: 'write' | 'edit';
+  ts: number;
+  before?: string;
+  after?: string;
+  diff?: string;
+  truncated?: boolean;
 }
 
 export type SchedulerEvent =

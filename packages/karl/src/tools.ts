@@ -3,7 +3,7 @@ import { promises as fs } from 'fs';
 import { Type, type Static, type TSchema } from '@sinclair/typebox';
 import { pathToFileURL } from 'url';
 import { HookRunner } from './hooks.js';
-import { SchedulerEvent } from './types.js';
+import type { SchedulerEvent, ToolDiff } from './types.js';
 import { ensureDir, formatError, pathExists, resolveHomePath } from './utils.js';
 
 // Types matching pi-agent-core/pi-ai
@@ -42,6 +42,8 @@ interface ToolContext {
   task?: string;
   taskIndex?: number;
   unrestricted?: boolean;
+  onDiff?: (diff: ToolDiff) => void;
+  diffConfig?: { maxBytes?: number; maxLines?: number };
 }
 
 function assertWithinCwd(resolved: string, cwd: string, operation: string): void {
@@ -84,6 +86,71 @@ function extractToolDetail(name: string, params: any): string {
     default:
       return '';
   }
+}
+
+const DEFAULT_DIFF_BYTES = 20000;
+const DEFAULT_DIFF_LINES = 400;
+
+function truncateByBytes(text: string, maxBytes: number): { text: string; truncated: boolean } {
+  const buffer = Buffer.from(text);
+  if (buffer.byteLength <= maxBytes) {
+    return { text, truncated: false };
+  }
+  return {
+    text: Buffer.from(buffer.subarray(0, maxBytes)).toString('utf8'),
+    truncated: true
+  };
+}
+
+function truncateByLines(text: string, maxLines: number): { text: string; truncated: boolean } {
+  const lines = text.split(/\r?\n/);
+  if (lines.length <= maxLines) {
+    return { text, truncated: false };
+  }
+  return {
+    text: lines.slice(0, maxLines).join('\n'),
+    truncated: true
+  };
+}
+
+function normalizeDiffText(text: string, maxBytes: number, maxLines: number): { text: string; truncated: boolean } {
+  const byteTrim = truncateByBytes(text, maxBytes);
+  const lineTrim = truncateByLines(byteTrim.text, maxLines);
+  return {
+    text: lineTrim.text,
+    truncated: byteTrim.truncated || lineTrim.truncated
+  };
+}
+
+function buildDiff(pathLabel: string, before: string | undefined, after: string | undefined, truncated: boolean): string {
+  const diffLines: string[] = [`--- ${pathLabel}`, `+++ ${pathLabel}`, '@@'];
+  if (before !== undefined) {
+    for (const line of before.split(/\r?\n/)) {
+      diffLines.push(`-${line}`);
+    }
+  }
+  if (after !== undefined) {
+    for (const line of after.split(/\r?\n/)) {
+      diffLines.push(`+${line}`);
+    }
+  }
+  if (truncated) {
+    diffLines.push('@@ truncated');
+  }
+  return diffLines.join('\n');
+}
+
+async function readFileSnapshot(filePath: string, maxBytes: number): Promise<{ text: string; truncated: boolean }> {
+  const file = Bun.file(filePath);
+  const size = file.size;
+  if (!size) {
+    return { text: '', truncated: false };
+  }
+  if (size > maxBytes) {
+    const buffer = await file.slice(0, maxBytes).arrayBuffer();
+    return { text: new TextDecoder().decode(buffer), truncated: true };
+  }
+  return { text: await file.text(), truncated: false };
 }
 
 function wrapExecute<T, D>(
@@ -356,9 +423,36 @@ export async function createBuiltinTools(ctx: ToolContext): Promise<AgentTool[]>
         if (!ctx.unrestricted) {
           assertWithinCwd(resolved, ctx.cwd, 'Writing');
         }
+        const maxBytes = ctx.diffConfig?.maxBytes ?? DEFAULT_DIFF_BYTES;
+        const maxLines = ctx.diffConfig?.maxLines ?? DEFAULT_DIFF_LINES;
+        let beforeSnapshot: { text: string; truncated: boolean } | undefined;
+        if (await pathExists(resolved)) {
+          const snapshot = await readFileSnapshot(resolved, maxBytes);
+          const normalized = normalizeDiffText(snapshot.text, maxBytes, maxLines);
+          beforeSnapshot = {
+            text: normalized.text,
+            truncated: snapshot.truncated || normalized.truncated
+          };
+        }
+
+        const afterSnapshot = normalizeDiffText(params.content, maxBytes, maxLines);
+
         await ensureDir(path.dirname(resolved));
         await Bun.write(resolved, params.content);
         const bytes = Buffer.byteLength(params.content);
+        if (ctx.onDiff) {
+          const truncated = (beforeSnapshot?.truncated ?? false) || afterSnapshot.truncated;
+          const diff = buildDiff(resolved, beforeSnapshot?.text, afterSnapshot.text, truncated);
+          ctx.onDiff({
+            path: resolved,
+            tool: 'write',
+            ts: Date.now(),
+            before: beforeSnapshot?.text,
+            after: afterSnapshot.text,
+            diff,
+            truncated
+          });
+        }
         return textResult(`Wrote ${bytes} bytes to ${resolved}`, { path: resolved, bytesWritten: bytes });
       },
       ctx
@@ -377,6 +471,8 @@ export async function createBuiltinTools(ctx: ToolContext): Promise<AgentTool[]>
         if (!ctx.unrestricted) {
           assertWithinCwd(resolved, ctx.cwd, 'Editing');
         }
+        const maxBytes = ctx.diffConfig?.maxBytes ?? DEFAULT_DIFF_BYTES;
+        const maxLines = ctx.diffConfig?.maxLines ?? DEFAULT_DIFF_LINES;
         const content = await Bun.file(resolved).text();
 
         if (!content.includes(params.oldText)) {
@@ -387,6 +483,21 @@ export async function createBuiltinTools(ctx: ToolContext): Promise<AgentTool[]>
         await Bun.write(resolved, newContent);
 
         const diff = params.oldText.length - params.newText.length;
+        if (ctx.onDiff) {
+          const beforeSnapshot = normalizeDiffText(params.oldText, maxBytes, maxLines);
+          const afterSnapshot = normalizeDiffText(params.newText, maxBytes, maxLines);
+          const truncated = beforeSnapshot.truncated || afterSnapshot.truncated;
+          const diffText = buildDiff(resolved, beforeSnapshot.text, afterSnapshot.text, truncated);
+          ctx.onDiff({
+            path: resolved,
+            tool: 'edit',
+            ts: Date.now(),
+            before: beforeSnapshot.text,
+            after: afterSnapshot.text,
+            diff: diffText,
+            truncated
+          });
+        }
         return textResult(`Edited ${resolved}: replaced ${params.oldText.length} chars with ${params.newText.length} chars`, {
           path: resolved,
           charDiff: diff

@@ -4,30 +4,54 @@ import { loadConfig, resolveModel, isConfigValid } from './config.js';
 import { buildSystemPrompt } from './context.js';
 import { HookRunner } from './hooks.js';
 import { initState, applyEvent } from './state.js';
-import { VolleyScheduler } from './scheduler.js';
 import { runTask } from './runner.js';
 import { printResults } from './print.js';
-import { CliOptions } from './types.js';
-import { formatError, parseDurationMs, readTextIfExists } from './utils.js';
+import { StatusWriter } from './status.js';
+import { type CliOptions, type RetryConfig, type SchedulerEvent, type TaskResult, type ToolDiff } from './types.js';
+import { formatError, parseDurationMs, readTextIfExists, resolveHomePath, sleep } from './utils.js';
 import { getProviderOAuthToken } from './oauth.js';
 import { Spinner } from './spinner.js';
 import { loadStack, StackManager } from './stacks.js';
 import { SkillManager } from './skills.js';
 import { createInterface } from 'readline';
+import { TaskRunError } from './errors.js';
+import { buildHistoryId, createHistoryStore, type HistoryThinkingEntry } from './history.js';
 
 /**
  * Built-in commands that are handled specially.
  * Everything else is either a stack-as-verb or an error.
  */
 const BUILTIN_COMMANDS = new Set([
+  // Core commands
   'run',       // Run task using 'default' stack
+  'ask',       // Alias for run
+  'do',        // Alias for run
+  'execute',   // Alias for run
+  'exec',      // Alias for run
+  'continue',  // Run with --continue (chains from last run)
+  'cont',      // Alias for continue
+  'followup',  // Alias for continue
+  'follow-up', // Alias for continue
+  'chain',     // Alias for continue
+  // Management commands
   'init',      // First-run setup wizard
+  'setup',     // Alias for init
   'providers', // Provider management
   'models',    // Model management
   'stacks',    // Stack management
   'skills',    // Skill management
   'info',      // System info
+  'status',    // Alias for info
+  'history',   // Run history
+  'logs',      // Alias for history (or job logs)
+  'jobs',      // List background jobs
+  'previous',  // Last response shortcut
+  'prev',      // Alias for previous
+  'last',      // Alias for previous
+  'tldr',      // Quick reference primer
+  'help',      // Alias for tldr
   'as',        // Legacy stack syntax
+  'agent',     // Launch Claude Code with Karl-only tools
 ]);
 
 /**
@@ -192,6 +216,34 @@ async function runStackCreationWizard(name: string, originalArgs: string[]): Pro
   }
 }
 
+async function printOverview(): Promise<void> {
+  const overview = `karl run <task>
+karl <stack> <task>         (stack as verb)
+karl continue <task>        (chain from last run)
+
+Commands:
+  run <task>                Run a single task (aliases: ask, do, exec)
+  continue <task>           Chain from last run (aliases: cont, followup, chain)
+  init                      First-time setup (alias: setup)
+  providers                 Manage providers
+  models                    Manage models
+  stacks                    Manage config stacks
+  skills                    Manage agent skills
+  info                      Show system info
+  history                   Show run history
+  jobs                      List background jobs
+  previous                  Print last response (aliases: prev, last)
+  agent                     Launch Claude Code with Karl-only access
+
+Flags:
+  --help, -h           Show full help
+  --version            Show version
+
+Use "karl --help" for full help, including run flags and subcommands.
+`;
+  console.log(overview);
+}
+
 async function printHelp(): Promise<void> {
   // Get available stacks to show as verbs
   let stackVerbs = '';
@@ -224,35 +276,50 @@ async function printHelp(): Promise<void> {
   }
 
   const help = `karl run <task>
-karl <command> <task>       (stack as verb)
+karl <stack> <task>         (stack as verb)
+karl continue <task>        (chain from last run)
 
 Built-in Commands:
-  run <task>                Run a single task
-  init                      First-time setup wizard
+  run <task>                Run a task (aliases: ask, do, exec)
+  continue <task>           Chain from last run (aliases: cont, followup, chain)
+  init                      First-time setup (alias: setup)
   providers                 Manage providers (add, login, logout)
   models                    Manage models (add, remove, list)
   stacks                    Manage config stacks
   skills                    Manage agent skills
-  info                      Show system info (--json for JSON)
+  info                      Show system info (alias: status)
+  history                   Show run history (alias: logs)
+  previous                  Print last response (aliases: prev, last)
+  agent                     Launch Claude Code with Karl-only access
 ${stackVerbs}
 Flags (use with 'run'):
   --model, -m          Model alias or exact model id
-  --verbose, -v        Stream thoughts and tool calls
+  --verbose, -v        Stream thoughts and tool calls (aliases: --stream, --progress)
   --json, -j           JSON output
   --stats              Print summary stats
-  --max-concurrent     Max parallel tasks (default: 3)
   --timeout            Per-task timeout (e.g. 30s, 5000ms)
   --skill              Load a skill by name
-  --no-tools           Disable tool use
+  --no-tools           Disable tool use (aliases: --pure, --reasoning)
   --unrestricted       Allow writes outside working directory
   --context            Extra system prompt text
   --context-file       Path to context file (use - for stdin)
-  --tasks-file         Path to a tasks file (one per line)
-  --volley             Enable multi-task mode (task1 task2 ...)
+  --continue, -c       Chain from last run (injects previous response as context)
+  --parent             Parent run id or reference (@last, @-2) - injects response as context
+  --follow-up          Alias for --parent
+  --tag                Tag this run (repeatable)
+  --no-history         Disable history logging for this run
+  --background, -bg    Run in background, return job ID immediately
   -                    Read task from stdin
   --dry-run            Show config without running
   --help, -h           Show help
   --version            Show version
+
+Jobs Commands:
+  karl jobs                   List background jobs
+  karl jobs clean             Cleanup old completed jobs
+  karl status <job-id>        Show job progress
+  karl logs <job-id>          Show job output
+  karl logs <job-id> --tail   Follow job output
 
 Providers Commands:
   karl providers list           List configured providers
@@ -298,18 +365,6 @@ async function readStdin(): Promise<string> {
   return Buffer.concat(chunks).toString('utf-8');
 }
 
-async function readTasksFile(filePath: string, cwd: string): Promise<string[]> {
-  const resolved = path.isAbsolute(filePath) ? filePath : path.join(cwd, filePath);
-  const content = await readTextIfExists(resolved);
-  if (content === null) {
-    throw new Error(`Tasks file not found: ${resolved}`);
-  }
-  return content
-    .split(/\r?\n/)
-    .map((line) => line.trim())
-    .filter(Boolean);
-}
-
 function parseArgs(argv: string[]): { options: CliOptions; tasks: (string | null)[]; wantsHelp: boolean; wantsVersion: boolean; wantsLogin: boolean; wantsLogout: boolean } {
   const options: CliOptions = {};
   const tasks: (string | null)[] = [];
@@ -346,6 +401,8 @@ function parseArgs(argv: string[]): { options: CliOptions; tasks: (string | null
         break;
       case '--verbose':
       case '-v':
+      case '--stream':
+      case '--progress':
         options.verbose = true;
         break;
       case '--json':
@@ -354,9 +411,6 @@ function parseArgs(argv: string[]): { options: CliOptions; tasks: (string | null
         break;
       case '--stats':
         options.stats = true;
-        break;
-      case '--max-concurrent':
-        options.maxConcurrent = Number(requireValue(flag, inlineValue ?? argv[++i]));
         break;
       case '--timeout': {
         const raw = requireValue(flag, inlineValue ?? argv[++i]);
@@ -371,6 +425,9 @@ function parseArgs(argv: string[]): { options: CliOptions; tasks: (string | null
         options.skill = requireValue(flag, inlineValue ?? argv[++i]);
         break;
       case '--no-tools':
+      case '--notools':
+      case '--pure':
+      case '--reasoning':
         options.noTools = true;
         break;
       case '--unrestricted':
@@ -382,14 +439,36 @@ function parseArgs(argv: string[]): { options: CliOptions; tasks: (string | null
       case '--context-file':
         options.contextFile = requireValue(flag, inlineValue ?? argv[++i]);
         break;
-      case '--tasks-file':
-        options.tasksFile = requireValue(flag, inlineValue ?? argv[++i]);
-        break;
       case '--dry-run':
         options.dryRun = true;
         break;
-      case '--volley':
-        options.volley = true;
+      case '--parent':
+      case '--follow-up':
+      case '--followup':
+      case '--chain':
+        options.parent = requireValue(flag, inlineValue ?? argv[++i]);
+        break;
+      case '--continue':
+      case '-c':
+        // Shorthand for --parent @last
+        options.parent = '@last';
+        break;
+      case '--tag': {
+        const tag = requireValue(flag, inlineValue ?? argv[++i]);
+        if (!options.tags) {
+          options.tags = [];
+        }
+        options.tags.push(tag);
+        break;
+      }
+      case '--no-history':
+        options.noHistory = true;
+        break;
+      case '--background':
+      case '-bg':
+      case '--bg':
+      case '--detach':
+        options.background = true;
         break;
       case '--stack':
         options.stack = requireValue(flag, inlineValue ?? argv[++i]);
@@ -412,16 +491,76 @@ function parseArgs(argv: string[]): { options: CliOptions; tasks: (string | null
     }
   }
 
-  // Validate: multiple positional args require --volley or --tasks-file
-  if (tasks.length > 1 && !options.volley && !options.tasksFile) {
-    throw new Error(
-      `Multiple tasks require --volley flag.\n` +
-      `  Got: ${tasks.map(t => `"${t}"`).join(' ')}\n` +
-      `  Use: karl run --volley "task1" "task2" ...`
-    );
+  if (tasks.length > 1) {
+    throw new Error(`Multiple tasks provided. Karl accepts a single task per run.`);
   }
 
   return { options, tasks, wantsHelp, wantsVersion, wantsLogin, wantsLogout };
+}
+
+function isRetryable(error: unknown): boolean {
+  if (error && typeof error === 'object') {
+    const anyError = error as { retryable?: boolean; status?: number; code?: number };
+    if (anyError.retryable) {
+      return true;
+    }
+    const status = anyError.status ?? anyError.code;
+    if (status && [408, 429, 500, 502, 503, 504].includes(status)) {
+      return true;
+    }
+  }
+  const message = formatError(error).toLowerCase();
+  return message.includes('rate limit') || message.includes('timeout') || message.includes('temporar');
+}
+
+function backoffMs(attempt: number, strategy: 'exponential' | 'linear'): number {
+  if (strategy === 'linear') {
+    return Math.min(60_000, attempt * 1_000);
+  }
+  return Math.min(60_000, 1_000 * Math.pow(2, attempt - 1));
+}
+
+async function runTaskWithRetry(
+  task: string,
+  runner: (attempt: number) => ReturnType<typeof runTask>,
+  retryConfig: RetryConfig,
+  onEvent?: (event: SchedulerEvent) => void
+): Promise<TaskResult> {
+  let attempt = 0;
+  while (true) {
+    const attemptStart = Date.now();
+    try {
+      return await runner(attempt);
+    } catch (error) {
+      const retryable = isRetryable(error);
+      if (retryable && attempt < retryConfig.attempts) {
+        const delayMs = backoffMs(attempt + 1, retryConfig.backoff);
+        onEvent?.({
+          type: 'task_retry',
+          taskIndex: 0,
+          task,
+          time: Date.now(),
+          attempt: attempt + 1,
+          delayMs,
+          error: formatError(error)
+        });
+        await sleep(delayMs);
+        attempt += 1;
+        continue;
+      }
+      const message = formatError(error);
+      const errorData = error as TaskRunError;
+      const durationMs = errorData.durationMs ?? Date.now() - attemptStart;
+      return {
+        task,
+        status: 'error',
+        error: message,
+        durationMs,
+        toolsUsed: errorData.toolsUsed ?? [],
+        tokens: errorData.tokens
+      };
+    }
+  }
 }
 
 async function loadVersion(): Promise<string> {
@@ -447,7 +586,7 @@ async function main() {
 
   // No args = show help
   if (!firstArg) {
-    await printHelp();
+    await printOverview();
     return;
   }
 
@@ -456,15 +595,20 @@ async function main() {
   // ─────────────────────────────────────────────────────────────────────────
 
   // Handle 'run' command - uses 'default' stack
-  if (firstArg === 'run') {
+  if (firstArg === 'run' || firstArg === 'ask' || firstArg === 'do' || firstArg === 'execute' || firstArg === 'exec') {
     args = args.slice(1);  // Remove 'run', rest are flags + tasks
     // Always use 'default' stack (unless --stack is explicitly specified)
     if (!args.includes('--stack')) {
       args = ['--stack', 'default', ...args];
     }
   }
-  // Handle 'init' - CLI-based setup wizard
-  else if (firstArg === 'init') {
+  // Handle 'continue' / 'followup' / 'chain' commands - run with --continue
+  else if (firstArg === 'continue' || firstArg === 'cont' || firstArg === 'followup' || firstArg === 'follow-up' || firstArg === 'chain') {
+    args = args.slice(1);
+    args = ['--stack', 'default', '--continue', ...args];
+  }
+  // Handle 'init' / 'setup' - CLI-based setup wizard
+  else if (firstArg === 'init' || firstArg === 'setup') {
     const { handleInitCommand } = await import('./commands/init.js');
     await handleInitCommand();
     return;
@@ -499,6 +643,64 @@ async function main() {
     await handleInfoCommand(args.slice(1));
     return;
   }
+  // Handle 'status' command - shows job status or system info
+  else if (firstArg === 'status') {
+    const subArgs = args.slice(1);
+    // If a job ID is provided, show job status
+    if (subArgs.length > 0 && !subArgs[0].startsWith('-')) {
+      const { handleStatusCommand } = await import('./commands/jobs.js');
+      await handleStatusCommand(subArgs);
+    } else {
+      // Otherwise show system info
+      const { handleInfoCommand } = await import('./commands/info.js');
+      await handleInfoCommand(subArgs);
+    }
+    return;
+  }
+  // Handle 'jobs' command - list/manage background jobs
+  else if (firstArg === 'jobs') {
+    const { handleJobsCommand } = await import('./commands/jobs.js');
+    await handleJobsCommand(args.slice(1));
+    return;
+  }
+  // Handle 'history' command
+  else if (firstArg === 'history') {
+    const { handleHistoryCommand } = await import('./commands/history.js');
+    await handleHistoryCommand(args.slice(1));
+    return;
+  }
+  // Handle 'logs' command - job logs or alias for history
+  else if (firstArg === 'logs') {
+    const subArgs = args.slice(1);
+    // If a job ID is provided, show job logs
+    if (subArgs.length > 0 && !subArgs[0].startsWith('-')) {
+      const { handleLogsCommand } = await import('./commands/jobs.js');
+      await handleLogsCommand(subArgs);
+    } else {
+      // Otherwise show run history
+      const { handleHistoryCommand } = await import('./commands/history.js');
+      await handleHistoryCommand(subArgs);
+    }
+    return;
+  }
+  // Handle 'previous' / 'prev' / 'last' command
+  else if (firstArg === 'previous' || firstArg === 'prev' || firstArg === 'last') {
+    const { handlePreviousCommand } = await import('./commands/previous.js');
+    await handlePreviousCommand(args.slice(1));
+    return;
+  }
+  // Handle 'tldr' / 'help' command
+  else if (firstArg === 'tldr' || firstArg === 'help') {
+    const { handleTldrCommand } = await import('./commands/tldr.js');
+    await handleTldrCommand(args.slice(1));
+    return;
+  }
+  // Handle 'agent' command - launch Claude Code with Karl-only tools
+  else if (firstArg === 'agent') {
+    const { handleAgentCommand } = await import('./commands/agent.js');
+    await handleAgentCommand(args.slice(1));
+    return;
+  }
   // Handle legacy 'as <stack>' syntax
   else if (firstArg === 'as' && args.length >= 2) {
     const stackName = args[1];
@@ -523,8 +725,16 @@ async function main() {
       const isValidCommandName = /^[a-zA-Z][a-zA-Z0-9_-]*$/.test(firstArg);
 
       if (isValidCommandName) {
-        // Looks like a command name - offer to create a stack
+        // Looks like a command name - offer to create a stack (only in interactive mode)
         console.log(`Unknown command: "${firstArg}"`);
+
+        // Check for non-interactive environment
+        if (!process.stdin.isTTY) {
+          console.log(`Use 'karl stacks create ${firstArg}' to create this stack, or 'karl run "your task"' to run without a named stack.`);
+          process.exitCode = 1;
+          return;
+        }
+
         console.log('');
 
         const shouldCreate = await promptYesNo(`Create "${firstArg}" as a new command (stack)? [Y/n] `);
@@ -613,6 +823,28 @@ async function main() {
     }
   }
 
+  const needsHistoryStore = !effectiveOptions.noHistory || !!effectiveOptions.parent;
+  const historyStore = needsHistoryStore ? createHistoryStore(config.history, cwd) : null;
+  const recordHistory = !!historyStore && !effectiveOptions.noHistory;
+  let parentId: string | undefined;
+  let parentContext: string | undefined;
+  if (effectiveOptions.parent) {
+    if (!historyStore) {
+      throw new Error('History is disabled. Enable history to use --parent.');
+    }
+    parentId = historyStore.resolveRunId(effectiveOptions.parent) ?? undefined;
+    if (!parentId) {
+      throw new Error(`Parent run not found: ${effectiveOptions.parent}`);
+    }
+    // Fetch parent run and inject its response as context
+    const parentRun = historyStore.getRunById(parentId);
+    if (parentRun?.response) {
+      parentContext = `Previous response (from ${parentId}):\n\n${parentRun.response}`;
+      // Prepend parent context to existing context
+      effectiveOptions.context = parentContext + (effectiveOptions.context ? `\n\n${effectiveOptions.context}` : '');
+    }
+  }
+
   const resolvedModel = resolveModel(config, effectiveOptions);
 
   // Resolve credentials based on provider's authType
@@ -641,12 +873,13 @@ async function main() {
   
   const hooks = await HookRunner.load(cwd);
 
-  const tasksFromFile = effectiveOptions.tasksFile ? await readTasksFile(effectiveOptions.tasksFile, cwd) : [];
-  const tasks: (string | null)[] = [...rawTasks, ...tasksFromFile];
+  const tasks: (string | null)[] = [...rawTasks];
 
   // Check if context should be read from stdin
   const contextFromStdin = effectiveOptions.contextFile === '-';
-  const needsStdinForTask = tasks.some((task) => task === null);
+  const rawTask = tasks[0] ?? null;
+  const explicitStdinTask = tasks.length > 0 && rawTask === null;
+  const needsStdinForTask = explicitStdinTask || (tasks.length === 0 && !process.stdin.isTTY);
 
   // Can't read both context and task from stdin
   if (contextFromStdin && needsStdinForTask) {
@@ -655,13 +888,17 @@ async function main() {
 
   // Read stdin if needed for context or task
   let stdinContent: string | null = null;
-  const needsStdin = contextFromStdin || needsStdinForTask || (tasks.length === 0 && !process.stdin.isTTY);
+  let contextFilePath: string | undefined;
+  let contextFileRaw: string | undefined;
+  const needsStdin = contextFromStdin || needsStdinForTask;
   if (needsStdin) {
     stdinContent = (await readStdin()).trim();
   }
 
   // Handle context from stdin
   if (contextFromStdin && stdinContent) {
+    contextFilePath = '-';
+    contextFileRaw = stdinContent;
     // Append stdin content to context, clear contextFile so it's not read as a file
     effectiveOptions.context = effectiveOptions.context
       ? `${effectiveOptions.context}\n\n${stdinContent}`
@@ -669,26 +906,31 @@ async function main() {
     effectiveOptions.contextFile = undefined;
   }
 
-  // Handle task from stdin
-  const stdinTask = needsStdinForTask ? stdinContent : null;
-
-  const finalTasks: string[] = [];
-  for (const task of tasks) {
-    if (task === null) {
-      if (stdinTask) {
-        finalTasks.push(stdinTask);
-      }
-      continue;
-    }
-    finalTasks.push(task);
+  if (effectiveOptions.contextFile) {
+    const resolvedPath = resolveHomePath(effectiveOptions.contextFile);
+    const fullPath = path.isAbsolute(resolvedPath) ? resolvedPath : path.resolve(cwd, resolvedPath);
+    contextFilePath = fullPath;
+    contextFileRaw = (await readTextIfExists(fullPath)) ?? undefined;
   }
 
-  if (finalTasks.length === 0) {
+  // Handle task from stdin
+  const stdinTask = needsStdinForTask ? stdinContent : null;
+  const finalTask = rawTask ?? stdinTask;
+
+  if (!finalTask) {
     throw new Error('No tasks provided.');
   }
 
-  if (effectiveOptions.maxConcurrent !== undefined && (!Number.isFinite(effectiveOptions.maxConcurrent) || effectiveOptions.maxConcurrent < 1)) {
-    throw new Error('Invalid --max-concurrent value.');
+  // Background mode: launch as detached job and exit immediately
+  if (effectiveOptions.background) {
+    const { launchBackgroundJob } = await import('./jobs.js');
+    const { jobId, pid } = launchBackgroundJob(cwd, finalTask, process.argv.slice(2));
+    console.log(`Job started: ${jobId}`);
+    console.log(`PID: ${pid}`);
+    console.log('');
+    console.log(`Use 'karl status ${jobId}' to check progress`);
+    console.log(`Use 'karl logs ${jobId}' to view output`);
+    return;
   }
 
   // Dry run: show config without running
@@ -705,10 +947,7 @@ async function main() {
       console.log(`Stack:        ${options.stack}`);
     }
     console.log(`Tools:        ${effectiveOptions.noTools ? 'disabled' : config.tools.enabled.join(', ')}`);
-    console.log(`Tasks:        ${finalTasks.length}`);
-    for (const task of finalTasks) {
-      console.log(`  - "${task.length > 60 ? task.slice(0, 60) + '...' : task}"`);
-    }
+    console.log(`Task:         "${finalTask.length > 60 ? finalTask.slice(0, 60) + '...' : finalTask}"`);
     return;
   }
 
@@ -720,73 +959,147 @@ async function main() {
     unrestricted: effectiveOptions.unrestricted
   });
 
-  const state = initState(finalTasks);
+  const runStartedAt = Date.now();
+  const historyId = recordHistory ? buildHistoryId(new Date(runStartedAt)) : undefined;
+  const thinkingEvents: HistoryThinkingEntry[] = [];
+  let lastThinking = '';
+  const diffs: ToolDiff[] = [];
+  const contextInline = effectiveOptions.context;
+  const diffConfig = recordHistory
+    ? { maxBytes: config.history?.maxDiffBytes, maxLines: config.history?.maxDiffLines }
+    : undefined;
+  const onDiff = recordHistory ? (diff: ToolDiff) => diffs.push(diff) : undefined;
+  const argvSnapshot = process.argv.slice(2);
+  const command = argvSnapshot.length > 0 ? `karl ${argvSnapshot.join(' ')}` : 'karl';
+  const configSnapshot = {
+    stack: options.stack,
+    options: {
+      model: effectiveOptions.model,
+      skill: effectiveOptions.skill,
+      timeoutMs: effectiveOptions.timeoutMs,
+      maxTokens: effectiveOptions.maxTokens,
+      unrestricted: effectiveOptions.unrestricted,
+      noTools: effectiveOptions.noTools
+    },
+    model: {
+      key: resolvedModel.modelKey,
+      id: resolvedModel.model,
+      providerKey: resolvedModel.providerKey,
+      providerType: resolvedModel.providerConfig?.type
+    },
+    tools: config.tools,
+    retry: config.retry
+  };
+
+  const state = initState([finalTask]);
   const useVerbose = effectiveOptions.verbose && !effectiveOptions.json;
   const spinner = new Spinner(!effectiveOptions.json, useVerbose);
-
-  const scheduler = new VolleyScheduler(
-    {
-      maxConcurrent: effectiveOptions.maxConcurrent ?? config.volley.maxConcurrent,
-      retryAttempts: config.volley.retryAttempts,
-      retryBackoff: config.volley.retryBackoff,
-      timeoutMs: effectiveOptions.timeoutMs
-    },
-    (event) => {
-      applyEvent(state, event);
+  const statusWriter = new StatusWriter(cwd, finalTask, historyId);
+  const onEvent = (event: SchedulerEvent) => {
+    applyEvent(state, event);
+    if (event.type === 'thinking') {
+      spinner.setThinking(event.text);
+      statusWriter.onThinking(event.text);
+      if (recordHistory && event.text !== lastThinking) {
+        thinkingEvents.push({ ts: event.time, text: event.text });
+        lastThinking = event.text;
+      }
+    } else if (event.type === 'tool_start') {
+      spinner.toolStart(event.tool, event.detail);
+      statusWriter.onToolStart(event.tool, event.detail);
+    } else if (event.type === 'tool_end') {
+      spinner.toolEnd(event.tool, event.success);
+      statusWriter.onToolEnd(event.tool, event.success);
     }
-  );
+  };
 
-  let results: Awaited<ReturnType<typeof scheduler.run>> | null = null;
+  let result: Awaited<ReturnType<typeof runTask>> | null = null;
   try {
-    if (finalTasks.length === 1) {
-      spinner.start('');
-    } else if (finalTasks.length > 1) {
-      spinner.start(`volleying ${finalTasks.length} tasks...`);
-    }
-
-    results = await scheduler.run(finalTasks, (task, index, attempt) =>
-      runTask({
-        task,
-        index,
-        attempt,
-        cwd,
-        model: resolvedModel.model,
-        providerKey: resolvedModel.providerKey,
-        apiKey,
-        baseUrl: resolvedModel.providerConfig?.baseUrl,
-        systemPrompt,
-        hooks,
-        toolsConfig: config.tools,
-        noTools: effectiveOptions.noTools,
-        unrestricted: effectiveOptions.unrestricted,
-        timeoutMs: effectiveOptions.timeoutMs,
-        maxTokens: effectiveOptions.maxTokens ?? resolvedModel.maxTokens,
-        contextLength: resolvedModel.contextLength,
-        onEvent: (event) => {
-          applyEvent(state, event);
-          if (event.type === 'thinking') {
-            spinner.setThinking(event.text);
-          } else if (event.type === 'tool_start') {
-            spinner.toolStart(event.tool, event.detail);
-          } else if (event.type === 'tool_end') {
-            spinner.toolEnd(event.tool, event.success);
-          } else if (event.type === 'task_complete' && finalTasks.length > 1) {
-            const done = state.tasks.filter(t => t.status === 'done' || t.status === 'error').length;
-            spinner.update(`${done}/${finalTasks.length} tasks...`);
-          }
-        }
-      })
+    spinner.start('');
+    result = await runTaskWithRetry(
+      finalTask,
+      (attempt) =>
+        runTask({
+          task: finalTask,
+          index: 0,
+          attempt,
+          cwd,
+          model: resolvedModel.model,
+          providerKey: resolvedModel.providerKey,
+          apiKey,
+          baseUrl: resolvedModel.providerConfig?.baseUrl,
+          systemPrompt,
+          hooks,
+          toolsConfig: config.tools,
+          noTools: effectiveOptions.noTools,
+          unrestricted: effectiveOptions.unrestricted,
+          timeoutMs: effectiveOptions.timeoutMs,
+          maxTokens: effectiveOptions.maxTokens ?? resolvedModel.maxTokens,
+          contextLength: resolvedModel.contextLength,
+          onEvent,
+          onDiff,
+          diffConfig
+        }),
+      config.retry,
+      onEvent
     );
   } finally {
     spinner.stop();
   }
 
-  if (results) {
-    printResults(results, {
+  if (result) {
+    // Update status file
+    if (result.status === 'success') {
+      statusWriter.onComplete(result.durationMs);
+    } else {
+      statusWriter.onError(result.error ?? 'Unknown error', result.durationMs);
+    }
+
+    printResults([result], {
       json: effectiveOptions.json,
       verbose: effectiveOptions.verbose,
-      stats: effectiveOptions.stats
+      stats: effectiveOptions.stats,
+      historyId
     });
+    if (recordHistory && historyStore && historyId) {
+      const completedAt = Date.now();
+      try {
+        historyStore.insertRun({
+          id: historyId,
+          createdAt: runStartedAt,
+          completedAt,
+          durationMs: result.durationMs,
+          status: result.status,
+          exitCode: result.status === 'success' ? 0 : 1,
+          cwd,
+          command,
+          argv: argvSnapshot,
+          stack: options.stack,
+          modelKey: resolvedModel.modelKey,
+          modelId: resolvedModel.model,
+          providerKey: resolvedModel.providerKey,
+          providerType: resolvedModel.providerConfig?.type,
+          skill: effectiveOptions.skill,
+          prompt: finalTask,
+          response: result.result,
+          error: result.error,
+          thinking: thinkingEvents,
+          contextFilePath,
+          contextFileRaw,
+          contextInline,
+          systemPrompt,
+          configSnapshot,
+          toolsUsed: result.toolsUsed,
+          tokens: result.tokens,
+          diffs,
+          parentId,
+          tags: effectiveOptions.tags
+        });
+        console.error(`History: ${historyId}`);
+      } catch (error) {
+        console.error(`History error: ${formatError(error)}`);
+      }
+    }
   }
 }
 

@@ -13,10 +13,15 @@ const DEFAULT_CONFIG: KarlConfig = {
     enabled: ['bash', 'read', 'write', 'edit'],
     custom: ['~/.config/karl/tools/*.ts']
   },
-  volley: {
-    maxConcurrent: 3,
-    retryAttempts: 3,
-    retryBackoff: 'exponential'
+  retry: {
+    attempts: 3,
+    backoff: 'exponential'
+  },
+  history: {
+    enabled: true,
+    path: '~/.config/karl/history/history.db',
+    maxDiffBytes: 20000,
+    maxDiffLines: 400
   }
 };
 
@@ -67,6 +72,15 @@ export async function loadConfig(cwd: string): Promise<KarlConfig> {
   // Merge folder-loaded models and providers (folder takes precedence)
   merged.models = { ...merged.models, ...models };
   merged.providers = { ...merged.providers, ...providers };
+
+  const legacyVolley = (merged as { volley?: { retryAttempts?: number; retryBackoff?: 'exponential' | 'linear' } }).volley;
+  const hasRetryOverride = !!(globalConfig?.retry || projectConfig?.retry);
+  if (legacyVolley && !hasRetryOverride) {
+    merged.retry = {
+      attempts: legacyVolley.retryAttempts ?? merged.retry.attempts,
+      backoff: legacyVolley.retryBackoff ?? merged.retry.backoff
+    };
+  }
 
   return merged;
 }
