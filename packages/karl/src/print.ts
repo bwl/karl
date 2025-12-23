@@ -82,7 +82,8 @@ export function printResults(results: TaskResult[], options: PrintOptions): void
   const multi = results.length > 1;
   results.forEach((result, index) => {
     if (multi) {
-      console.log(`=== ${index + 1}/${results.length}: ${result.task} ===`);
+      console.log(`\x1b[1mTask ${index + 1}/${results.length}:\x1b[0m \x1b[2m${result.task.slice(0, 80)}${result.task.length > 80 ? '...' : ''}\x1b[0m`);
+      console.log('');
     }
     console.log(formatResultBody(result));
 
@@ -105,11 +106,11 @@ export function printResults(results: TaskResult[], options: PrintOptions): void
     const failed = results.length - succeeded;
     const totalDuration = results.reduce((sum, result) => sum + result.durationMs, 0);
     console.log('');
-    console.log('=== Summary ===');
-    console.log(`Tasks: ${results.length}  Succeeded: ${succeeded}  Failed: ${failed}`);
-    console.log(`Total time: ${formatDuration(totalDuration)}`);
+    console.log('\x1b[1m\x1b[36mSummary\x1b[0m');
+    console.log(`  \x1b[2mTasks:\x1b[0m ${results.length}  \x1b[2mSucceeded:\x1b[0m ${succeeded}  \x1b[2mFailed:\x1b[0m ${failed}`);
+    console.log(`  \x1b[2mTotal time:\x1b[0m ${formatDuration(totalDuration)}`);
     if (summaryTokens) {
-      console.log(`Tokens: ${JSON.stringify(summaryTokens)}`);
+      console.log(`  \x1b[2mTokens:\x1b[0m ${JSON.stringify(summaryTokens)}`);
     }
   }
 }
