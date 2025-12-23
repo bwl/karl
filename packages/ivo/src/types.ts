@@ -125,6 +125,32 @@ export interface SelectionResult {
 
 export type OutputFormat = 'xml' | 'markdown' | 'json';
 
+export interface ContextHistoryOptions {
+  limit?: number;
+  id?: string;
+  full?: boolean;
+  tag?: string[];
+  status?: 'success' | 'error';
+  stack?: string;
+  model?: string;
+  skill?: string;
+}
+
+export interface ContextHistoryEntry {
+  id?: string;
+  createdAt?: number;
+  status?: string;
+  prompt?: string;
+  response?: string;
+  [key: string]: unknown;
+}
+
+export interface ContextHistory {
+  source: 'karl';
+  mode: 'summary' | 'full';
+  entries: ContextHistoryEntry[];
+}
+
 export interface ContextOptions {
   /** Output format */
   format?: OutputFormat;
@@ -135,7 +161,9 @@ export interface ContextOptions {
   /** Response type for builder */
   responseType?: 'plan' | 'question' | 'clarify';
   /** What to include in context */
-  include?: ('prompt' | 'selection' | 'code' | 'files' | 'tree' | 'tokens')[];
+  include?: ('prompt' | 'selection' | 'code' | 'files' | 'tree' | 'tokens' | 'history')[];
+  /** Include run history */
+  history?: ContextHistoryOptions;
 }
 
 export interface ContextFile {
@@ -156,6 +184,7 @@ export interface ContextResult {
   prompt?: string;
   tree?: string;
   chatId?: string;
+  history?: ContextHistory;
 }
 
 // ============================================================================

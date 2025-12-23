@@ -7,8 +7,9 @@
 
 import type { Command } from 'commander';
 import type { IvoBackend } from '../backends/types.js';
-import type { ContextOptions, OutputFormat } from '../types.js';
+import type { ContextHistoryOptions, ContextOptions, OutputFormat } from '../types.js';
 import { formatContext } from '../output/index.js';
+import { loadHistoryContext } from '../history.js';
 
 export function registerContextCommand(program: Command, getBackend: () => Promise<IvoBackend>): void {
   program
@@ -19,9 +20,18 @@ export function registerContextCommand(program: Command, getBackend: () => Promi
     .option('-b, --budget <n>', 'Token budget limit', parseInt)
     .option('-p, --plan', 'Include implementation plan')
     .option('--question', 'Ask a question about the codebase')
-    .option('--include <items>', 'What to include: prompt,selection,code,files,tree,tokens', (v) =>
+    .option('--include <items>', 'What to include: prompt,selection,code,files,tree,tokens,history', (v) =>
       v.split(',')
     )
+    .option('--history', 'Include recent run history')
+    .option('--history-id <id>', 'Include a specific history entry by id')
+    .option('--history-limit <n>', 'Max history entries to include', parseInt)
+    .option('--history-full', 'Include full history records')
+    .option('--history-tag <tag>', 'Filter history by tag (repeatable)', collect)
+    .option('--history-status <status>', 'Filter history by status (success|error)')
+    .option('--history-stack <name>', 'Filter history by stack')
+    .option('--history-model <name>', 'Filter history by model key')
+    .option('--history-skill <name>', 'Filter history by skill')
     .option('--snapshot', 'Get current context snapshot (no AI exploration)')
     .addHelpText(
       'after',
@@ -44,6 +54,12 @@ Examples:
 
   # Limit token budget
   ivo context "Refactor utils" --budget 32000
+
+  # Include latest history entry
+  ivo context "Follow up" --history
+
+  # Include last 3 history entries with full records
+  ivo context "Follow up" --history --history-limit 3 --history-full
 `
     )
     .action(async (task: string | undefined, options) => {
@@ -51,12 +67,15 @@ Examples:
         const backend = await getBackend();
 
         const format = options.format as OutputFormat;
+        const include = options.include as ContextOptions['include'];
+        const historyOptions = buildHistoryOptions(options, include);
         const contextOpts: ContextOptions = {
           format,
           budget: options.budget,
           includePlan: options.plan,
           responseType: options.plan ? 'plan' : options.question ? 'question' : undefined,
-          include: options.include as ContextOptions['include'],
+          include,
+          history: historyOptions,
         };
 
         let result;
@@ -73,6 +92,18 @@ Examples:
           console.error('(This may take 30s-5min depending on codebase size)\n');
 
           result = await backend.buildContext(task, contextOpts);
+        }
+
+        if (historyOptions) {
+          try {
+            const history = await loadHistoryContext(historyOptions, process.cwd());
+            if (history) {
+              result.history = history;
+            }
+          } catch (error) {
+            const message = error instanceof Error ? error.message : String(error);
+            console.error(`History unavailable: ${message}`);
+          }
         }
 
         // Output the formatted result
@@ -106,4 +137,47 @@ function formatTokens(tokens: number): string {
     return `${(tokens / 1000).toFixed(1)}k`;
   }
   return String(tokens);
+}
+
+function collect(value: string, previous: string[] | undefined): string[] {
+  const next = previous ? [...previous] : [];
+  if (value && value.trim()) {
+    next.push(value.trim());
+  }
+  return next;
+}
+
+function buildHistoryOptions(
+  options: Record<string, unknown>,
+  include: ContextOptions['include']
+): ContextHistoryOptions | undefined {
+  const includeHistory = Boolean(
+    options.history ||
+      options.historyId ||
+      options.historyLimit ||
+      options.historyFull ||
+      options.historyTag ||
+      options.historyStatus ||
+      options.historyStack ||
+      options.historyModel ||
+      options.historySkill ||
+      include?.includes('history')
+  );
+
+  if (!includeHistory) {
+    return undefined;
+  }
+
+  const limitValue = typeof options.historyLimit === 'number' ? options.historyLimit : undefined;
+
+  return {
+    id: typeof options.historyId === 'string' ? options.historyId : undefined,
+    limit: limitValue,
+    full: Boolean(options.historyFull),
+    tag: Array.isArray(options.historyTag) ? options.historyTag : undefined,
+    status: options.historyStatus === 'success' || options.historyStatus === 'error' ? options.historyStatus : undefined,
+    stack: typeof options.historyStack === 'string' ? options.historyStack : undefined,
+    model: typeof options.historyModel === 'string' ? options.historyModel : undefined,
+    skill: typeof options.historySkill === 'string' ? options.historySkill : undefined,
+  };
 }
