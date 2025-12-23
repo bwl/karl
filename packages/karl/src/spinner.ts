@@ -6,148 +6,9 @@
 // Flipbook scenes - each is a multi-line ASCII art frame
 // Displayed slowly like a comic strip while working
 // All frames must be exactly 5 lines to prevent jumping
-const FRAME_HEIGHT = 5;
-const EMPTY_LINE = '              ';
+// Removed ASCII art flipbook for clean, borderless display
 
-const FLIPBOOK: string[][] = [
-  // Serve sequence
-  [
-    EMPTY_LINE,
-    EMPTY_LINE,
-    '    ○         ',
-    '   /|\\   🎾   ',
-    '   / \\        ',
-  ],
-  [
-    EMPTY_LINE,
-    EMPTY_LINE,
-    '    ○    🎾   ',
-    '   /|\\        ',
-    '   / \\        ',
-  ],
-  [
-    EMPTY_LINE,
-    EMPTY_LINE,
-    '    ○         ',
-    '   \\|    🎾   ',
-    '   / \\        ',
-  ],
-  [
-    EMPTY_LINE,
-    EMPTY_LINE,
-    '    ○         ',
-    '   \\|/   🎾   ',
-    '   / \\        ',
-  ],
-  // Ball in flight
-  [
-    EMPTY_LINE,
-    '         🎾   ',
-    '    ○         ',
-    '   /|\\        ',
-    '   / \\        ',
-  ],
-  [
-    EMPTY_LINE,
-    EMPTY_LINE,
-    '    ○    🎾   ',
-    '   /|\\        ',
-    '   / \\        ',
-  ],
-  // Return shot
-  [
-    EMPTY_LINE,
-    EMPTY_LINE,
-    '    ○         ',
-    '   /|\\   🎾   ',
-    '   / \\        ',
-  ],
-  [
-    EMPTY_LINE,
-    EMPTY_LINE,
-    '    ○         ',
-    '   \\|/        ',
-    '   / \\   🎾   ',
-  ],
-  // Diving save!
-  [
-    EMPTY_LINE,
-    EMPTY_LINE,
-    EMPTY_LINE,
-    '    ○_/       ',
-    '   /|    🎾   ',
-  ],
-  [
-    EMPTY_LINE,
-    EMPTY_LINE,
-    EMPTY_LINE,
-    '   \\○_🎾      ',
-    '    |\\        ',
-  ],
-  // Got it!
-  [
-    '        🎾    ',
-    EMPTY_LINE,
-    '   \\○/        ',
-    '    |         ',
-    '   / \\        ',
-  ],
-  // Victory pose
-  [
-    EMPTY_LINE,
-    EMPTY_LINE,
-    '   \\○/   🎾   ',
-    '    |         ',
-    '   / \\        ',
-  ],
-  [
-    EMPTY_LINE,
-    '     🎾       ',
-    '   \\○/        ',
-    '    |         ',
-    '   / \\        ',
-  ],
-  // Ball bouncing away
-  [
-    EMPTY_LINE,
-    EMPTY_LINE,
-    '    ○     🎾  ',
-    '   /|\\        ',
-    '   / \\        ',
-  ],
-  [
-    EMPTY_LINE,
-    EMPTY_LINE,
-    '    ○         ',
-    '   /|\\    🎾  ',
-    '   / \\        ',
-  ],
-  // Waiting for next point
-  [
-    EMPTY_LINE,
-    EMPTY_LINE,
-    '    ○         ',
-    '   /|\\        ',
-    '   / \\    🎾  ',
-  ],
-  [
-    EMPTY_LINE,
-    EMPTY_LINE,
-    '    ○    🎾   ',
-    '   /|\\        ',
-    '   / \\        ',
-  ],
-  // Getting ready again
-  [
-    EMPTY_LINE,
-    EMPTY_LINE,
-    '    ○   🎾    ',
-    '   /|\\        ',
-    '   / \\        ',
-  ],
-];
-
-const SPINNER_FRAMES = ['◐', '◓', '◑', '◒'];
+// const SPINNER_FRAMES = ['◐', '◓', '◑', '◒'];
 
 function getTerminalWidth(): number {
   return process.stderr.columns || 80;
@@ -159,7 +20,12 @@ interface ToolCall {
   status: 'running' | 'done' | 'error';
 }
 
+import pc from 'picocolors';
+import type { VisualsMode } from './utils/visuals.js';
+import { detectVisuals, SPINNER_STYLES } from './utils/visuals.js';
+
 export class Spinner {
+  private mode: VisualsMode;
   private interval: ReturnType<typeof setInterval> | null = null;
   private frameIndex = 0;
   private message = '';
@@ -171,8 +37,9 @@ export class Spinner {
   private lines = 0;
   private lastThinkingText = '';  // Track what we've already printed in verbose mode
 
-  constructor(enabled = true, verbose = false) {
+  constructor(enabled = true, verbose = false, override: string | undefined = undefined) {
     this.verbose = verbose;
+    this.mode = detectVisuals(override);
     // In verbose mode, we don't need TTY - we just stream text
     this.enabled = verbose || (enabled && process.stderr.isTTY === true);
   }
@@ -213,21 +80,19 @@ export class Spinner {
     if (this.verbose) {
       // In verbose mode, stream new thinking text as it arrives
       if (text.length > this.lastThinkingText.length && text.startsWith(this.lastThinkingText)) {
-        // Incremental update - just print the new part
         const newText = text.slice(this.lastThinkingText.length);
-        process.stderr.write(`\x1b[2m${newText}\x1b[0m`);
+        process.stderr.write(`${pc.dim(newText)}`);
       } else if (text !== this.lastThinkingText) {
-        // Text changed completely, print it all
-        process.stderr.write(`\x1b[2m${text}\x1b[0m`);
+        process.stderr.write(`${pc.dim(text)}`);
       }
       this.lastThinkingText = text;
       return;
     }
 
-    // Take last few lines of thinking, clean and truncate to terminal width
-    const maxWidth = getTerminalWidth() - 4;  // Leave room for prefix
-    const lines = text.split('\n').filter(l => l.trim());
-    this.thinking = lines.slice(-4).map(l => truncate(l.trim(), maxWidth));
+    // Single line last thinking
+    const maxWidth = getTerminalWidth() - 20;
+    const lines = text.split('\n').slice(-1);
+    this.thinking = lines.map(l => truncate(l.trim(), maxWidth));
     this.render();
   }
 
@@ -267,58 +132,39 @@ export class Spinner {
   }
 
   private clearLines(): void {
-    if (this.lines > 0) {
-      // Move up and clear each line
-      process.stderr.write(`\x1b[${this.lines}A`);
-      for (let i = 0; i < this.lines; i++) {
-        process.stderr.write('\x1b[2K\n');
-      }
-      process.stderr.write(`\x1b[${this.lines}A`);
-    }
+    process.stderr.write(`\r\x1b[2K`);
   }
 
   private render(): void {
-    this.clearLines();
-    
+    if (this.mode.spinner === 'none') return;
+
     const elapsed = ((Date.now() - this.startTime) / 1000).toFixed(1);
-    const scene = FLIPBOOK[this.frameIndex % FLIPBOOK.length];
-    const spinner = SPINNER_FRAMES[this.frameIndex % SPINNER_FRAMES.length];
+    const frames = SPINNER_STYLES[this.mode.spinner];
+    const spinner = frames[this.frameIndex % frames.length];
+
+    const termWidth = getTerminalWidth();
     
-    const lines: string[] = [];
-    
-    // Flipbook scene - no border, just the art
-    for (const sceneLine of scene) {
-      lines.push(`\x1b[2m${sceneLine}\x1b[0m`);
-    }
-    
-    // Thinking section (if any)
+    let statusLine = `${pc.cyan(spinner)} ${pc.bold(this.message || 'karl is on it...')} ${pc.dim(`(${elapsed}s)`)}`;
+
     if (this.thinking.length > 0) {
-      lines.push('');
-      lines.push(`\x1b[2m∴ Thinking…\x1b[0m`);
-      for (const line of this.thinking) {
-        lines.push(`\x1b[2m  ${line}\x1b[0m`);
-      }
+      const thinkText = this.thinking.slice(-1)[0] || '';
+      statusLine += ` ${pc.dim('∴')} ${pc.dim(thinkText.slice(0, termWidth / 2))}`;
     }
-    
-    // Current status
-    const status = this.message || 'karl is on it...';
-    lines.push('');
-    lines.push(`  ${spinner} ${status} \x1b[2m(${elapsed}s)\x1b[0m`);
-    
-    // Tool traces (last 3)
+
     if (this.toolCalls.length > 0) {
-      lines.push('');
-      for (const tool of this.toolCalls) {
-        const icon = tool.status === 'running' ? '▸' : 
-                     tool.status === 'done' ? '\x1b[32m✓\x1b[0m' : '\x1b[31m✗\x1b[0m';
-        const detail = tool.detail ? ` \x1b[2m${truncate(tool.detail, 40)}\x1b[0m` : '';
-        lines.push(`  ${icon} ${tool.name}${detail}`);
-      }
+      const recentTool = this.toolCalls.slice(-1)[0];
+      const icon = recentTool.status === 'running' ? pc.cyan('▸') : 
+                   recentTool.status === 'done' ? pc.green('✓') : pc.red('✗');
+      statusLine += ` ${icon} ${pc.dim(recentTool.name.slice(0, 20))}`;
     }
-    
-    const output = lines.join('\n') + '\n';
-    this.lines = lines.length;
-    process.stderr.write(output);
+
+    const stripped = stripAnsi(statusLine);
+    if (stripped.length > termWidth - 1) {
+      statusLine = statusLine.slice(0, (termWidth * 1.3)) + pc.dim('...');
+    }
+
+    process.stderr.write(`\r\x1b[2K${statusLine}`);
+    this.lines = 1;
   }
 
   stop(finalMessage?: string): void {
@@ -329,16 +175,14 @@ export class Spinner {
       this.interval = null;
     }
 
+    this.clearLines();
+    process.stderr.write('\n');
+
     if (this.verbose) {
-      // In verbose mode, just add a newline and optional message
       const elapsed = ((Date.now() - this.startTime) / 1000).toFixed(1);
-      process.stderr.write(`\n\x1b[2m── done in ${elapsed}s ──\x1b[0m\n\n`);
+      process.stderr.write(`${pc.dim(`── done in ${elapsed}s ──`)}\n\n`);
       return;
     }
-
-    // Clear our display
-    this.clearLines();
-    this.lines = 0;
 
     if (finalMessage) {
       process.stderr.write(`${finalMessage}\n`);
@@ -349,6 +193,10 @@ export class Spinner {
 function truncate(s: string, max: number): string {
   if (s.length <= max) return s;
   return s.slice(0, max - 3) + '...';
+}
+
+function stripAnsi(str: string): string {
+  return str.replace(/\x1b\[[0-9;]*m/g, '');
 }
 
 /**
