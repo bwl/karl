@@ -1026,6 +1026,7 @@ async function main() {
           cwd,
           model: resolvedModel.model,
           providerKey: resolvedModel.providerKey,
+          providerType: resolvedModel.providerConfig?.type,
           apiKey,
           baseUrl: resolvedModel.providerConfig?.baseUrl,
           systemPrompt,
