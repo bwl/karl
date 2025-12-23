@@ -14,6 +14,8 @@ Interactive wizard commands in `packages/karl/src/commands/`.
 | `stacks` | `commands/stacks.ts` | 365 | Stack management |
 | `skills` | `commands/skills.ts` | 412 | Skills management |
 | `info` | `commands/info.ts` | 217 | System information |
+| `history` | `commands/history.ts` | 241 | Run history listing/show |
+| `previous` | `commands/previous.ts` | 33 | Last response output |
 | `run` | `cli.ts` | inline | Execute tasks |
 
 ---
@@ -161,23 +163,23 @@ skill-name/
 | `--verbose` | `-v` | boolean | Stream thoughts and tools |
 | `--json` | `-j` | boolean | JSON output |
 | `--stats` | - | boolean | Print summary stats |
-| `--max-concurrent` | - | number | Max parallel tasks (default: 3) |
 | `--timeout` | - | duration | Per-task timeout |
 | `--skill` | - | string | Load skill by name |
 | `--no-tools` | - | boolean | Disable tool use |
 | `--unrestricted` | - | boolean | Allow writes outside cwd |
 | `--context` | - | string | Extra system prompt |
 | `--context-file` | - | path | Context file (use `-` for stdin) |
-| `--volley` | - | boolean | Multi-task mode |
 | `--dry-run` | - | boolean | Show config only |
 | `--stack` | - | string | Stack name |
+| `--parent` | - | string | Parent run id or reference (`@last`, `@-2`) |
+| `--tag` | - | string | Tag the run (repeatable) |
+| `--no-history` | - | boolean | Disable history logging |
 
 ### Usage Examples
 
 ```bash
 karl run "fix the bug"
 karl run --model opus "explain this code"
-karl run --volley "task1" "task2" "task3"
 karl run --skill code-review "check auth.ts"
 ```
 
@@ -222,6 +224,34 @@ Summary:
   "models": { "default": "sonnet", "configured": ["sonnet", "opus"] },
   "counts": { "skills": 3, "stacks": 5, "hooks": 0 }
 }
+```
+
+---
+
+## karl history
+
+List or show previous runs recorded in history.
+
+Examples:
+```bash
+karl history
+karl history --limit 10
+karl history --tag auth
+karl history ace_20240115_143218_ab12
+karl history ace_20240115_143218_ab12 --response
+```
+
+---
+
+## karl previous
+
+Print the last response text from history.
+
+Examples:
+```bash
+karl previous
+karl previous --id
+karl previous --json
 ```
 
 ---

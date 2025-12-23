@@ -6,7 +6,7 @@ High-level overview of Karl: an AI agent CLI with Agent Skills and Config Stacks
 
 ## Overview
 
-Karl is a high-performance, Bun-powered CLI tool designed for rapid LLM queries and parallel task execution. Named after tennis ace Ivo Karlovic, it embodies the "serve and volley" philosophy - fast, one-shot responses without multi-turn sessions.
+Karl is a high-performance, Bun-powered CLI tool designed for rapid LLM queries and single-shot execution with retries. Named after tennis ace Ivo Karlovic, it embodies the "serve and volley" philosophy - fast, one-shot responses without multi-turn sessions.
 
 **Repository:** `/Users/bwl/Developer/karl`
 **Main Package:** `packages/karl/`
@@ -55,16 +55,16 @@ karl/
 
 | File | Lines | Purpose |
 |------|------:|---------|
-| `cli.ts` | 796 | Main CLI entry, command routing |
+| `cli.ts` | 951 | Main CLI entry, command routing |
 | `commands/models.ts` | 588 | Model management |
 | `commands/providers.ts` | 543 | Provider management |
 | `commands/skills.ts` | 411 | Agent Skills implementation |
 | `tools.ts` | 401 | Built-in tools (bash, read, write, edit) |
+| `history.ts` | 479 | Run history storage |
 | `commands/stacks.ts` | 364 | Stack management |
 | `spinner.ts` | 360 | TUI spinner and progress |
 | `skills.ts` | 343 | Skills loader and validator |
 | `runner.ts` | 301 | Task execution via pi-ai |
-| `scheduler.ts` | 109 | Parallel task scheduler |
 
 ---
 
@@ -151,11 +151,15 @@ Implements the [Agent Skills](https://agentskills.io) open standard:
 
 ## Key Features
 
-### Parallel Execution (Volley Mode)
+### Retry Handling
 
-- Worker pool (default: 3 concurrent)
 - Automatic retry with exponential backoff
 - Rate limit handling (429 errors)
+
+### Run History
+
+- SQLite-backed history of prompts, context, diffs, and responses
+- `karl history` and `karl previous` for inspection
 
 ### OAuth Authentication
 
@@ -181,8 +185,8 @@ Named configurations bundling model, skills, and context:
 Karl is a well-structured TypeScript CLI built on Bun for high-performance LLM task execution. Key strengths:
 
 - **Fast startup** - Bun runtime
-- **Parallel execution** - Volley scheduler
 - **Extensible** - Skills, hooks, custom tools
 - **Ergonomic** - Stack-as-verb pattern
+- **Traceable** - Persistent run history
 
-**Total:** ~6,100 lines across 22 TypeScript files
+**Total:** ~7,500 lines across 26 TypeScript files

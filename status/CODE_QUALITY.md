@@ -44,7 +44,7 @@ packages/karl/**/*.spec.ts  # None found
 ### Recommendations
 
 1. Add Bun's built-in test runner (`bun test`)
-2. Start with core modules: runner, scheduler, config
+2. Start with core modules: runner, cli, config
 3. Target 60%+ coverage for business logic
 
 ---
@@ -109,7 +109,7 @@ class TimeoutError extends Error {
 }
 ```
 
-**Pattern:** Catch, enrich with context, propagate to scheduler for retry logic.
+**Pattern:** Catch, enrich with context, propagate to retry loop for retry logic.
 
 ### Async/Await Usage
 
@@ -129,7 +129,7 @@ class TimeoutError extends Error {
 src/
 ├── cli.ts          (797 lines) - Entry point
 ├── runner.ts       (302 lines) - Task execution
-├── scheduler.ts    (110 lines) - Parallel scheduling
+├── history.ts      (479 lines) - Run history storage
 ├── types.ts        (202 lines) - Type definitions
 ├── config.ts       (166 lines) - Config loading
 ├── tools.ts        (402 lines) - Built-in tools
@@ -189,7 +189,7 @@ src/
 ### Critical (P0)
 
 1. **Add test coverage**
-   - Core modules: runner, scheduler, config, skills
+   - Core modules: runner, cli, config, skills
    - Use Bun's built-in test runner
 
 2. **Create package README**

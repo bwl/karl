@@ -198,6 +198,242 @@ Real-time token counting with visual thresholds:
 
 **Predictive Cost Estimation**: Display live cost based on selected model's pricing.
 
+---
+
+## Context Slicing Playbook (Draft)
+
+The goal: pack the highest-relevance context into a fixed budget with predictable, explainable rules.
+
+### Goals
+- Maximize task relevance per token while preserving provenance (path, lang, source).
+- Prefer deterministic outputs for the same task + repo + budget.
+- Degrade gracefully when tools are missing or outputs are too large.
+- Keep the slicing logic reusable (CLI, TUI, and future bucket filler).
+
+### Inputs
+- Task text and any explicit targets (files, symbols, errors).
+- Repo inventory (paths, language, size, git status).
+- Token budget and policy (hard cap, warning threshold).
+- Tool availability (rg, git, tree-sitter, ast-grep, etc).
+- Optional history context (last response, diffs, tags) from `karl history`.
+
+### Strategy Catalog
+
+| Strategy | Primary tools | Output | When it helps |
+| --- | --- | --- | --- |
+| Inventory slice | `git ls-files`, `rg --files`, `tree -L` | paths + tree | Fast repo overview, path hints |
+| Keyword slice | `rg`, `git grep` | snippets + context | Error strings, API names, TODOs |
+| Symbol slice | `tree-sitter tags`, `ctags` | defs/refs | Jump to declarations, API surfaces |
+| AST pattern slice | `ast-grep`, `semgrep` | structural matches | Find usages beyond text patterns |
+| Config slice | `jq`, `yq` | focused config blocks | Dependencies, flags, env usage |
+| Diff/recency slice | `git diff`, `git log` | changed files + diffs | Current work, regressions |
+| Complexity slice | `tokei`, `scc` | hot spots | Identify large/complex files |
+| Doc/asset slice | `rga`, `ugrep` | text from archives/PDFs | Specs, README, PDFs |
+
+### Default Priority (Heuristics)
+1) Honor ignores and prune obvious noise (`node_modules`, `dist`, generated files).
+2) Extract explicit targets from the task (paths, symbols, error text).
+3) Run keyword search for explicit targets and gather minimal context windows.
+4) Pull adjacent context via imports/exports and dependency edges.
+5) Include relevant configs (package.json, tsconfig, bunfig, env templates).
+6) Add tests or docs only if the task calls for them.
+7) Add recent diffs or commits if the task implies regressions.
+
+### Scoring and Ordering (Simple Draft)
+```
+score = 0.35 * explicit_match
+      + 0.25 * search_density
+      + 0.15 * dependency_proximity
+      + 0.15 * git_recency
+      - 0.10 * size_penalty
+```
+Sort by score, then path for stable ordering.
+
+### Representation Levels (Budget Controls)
+1) Full file (highest relevance only).
+2) Snippet window (search hit +/- N lines or function context).
+3) Codemap (symbols, signatures, exports, imports).
+4) Reference only (path + reason).
+
+Downshift order: full -> snippet -> codemap -> reference.
+
+### Intensity Levels (for the future bucket filler)
+- Lite: inventory + keyword slice + top configs. Minimal codemaps.
+- Standard: add symbol slice, dependency adjacency, and diffs.
+- Deep: add AST patterns, complexity slices, and doc/asset search.
+
+### Fallback Rules
+- If no git repo: use `rg --files` or `fd` and `ls -lt` for recency.
+- If no tree-sitter/ctags: fall back to text-based symbol search.
+- If AST tools missing: use `rg` patterns and narrower globs.
+- If results are too large: tighten globs or reduce context lines before dropping items.
+- If budget is exceeded: downshift representation before excluding.
+- If binary/doc adapters missing: keep references with notes.
+
+### Output Shape (for UIs and downstream tools)
+Each slice candidate should include:
+```
+{ path, strategy, score, tokens, representation, reason, source }
+```
+This lets any UI sort, filter, and assemble without changing how slices are produced.
+
+### Implementation Note: Shared Slicer Library
+The bucket filler UI should only orchestrate choices (strategy + intensity + budget).
+Actual slice production should live in a shared library also used by OVI, so the
+CLI, UI, and daemon always produce identical slices for the same inputs.
+
+### Concrete Recipes (Examples)
+
+Inventory (fast baseline):
+```
+rg --files -g '!**/node_modules/**'
+tree -L 3 -I 'node_modules|dist|.git' --gitignore
+```
+
+Keyword to snippet (error strings, APIs):
+```
+rg -n -C 2 "timeout|rate limit|auth" packages
+git grep -n -C 2 "karl|ivo|context" -- packages
+```
+
+Function context (when symbols matter):
+```
+git grep -n -W "createSession|validateSession" -- packages
+```
+
+AST pattern (structural matches):
+```
+sg -p 'new $TYPE($$$ARGS)' -l ts packages
+sg -p '$X.request($$$ARGS)' -l ts packages
+```
+
+Tags/symbols (definitions and references):
+```
+tree-sitter tags packages/karl/src/**/*.ts
+ctags -R --languages=TypeScript packages/karl/src
+```
+
+Config slice (targeted settings):
+```
+jq '.scripts,.dependencies,.devDependencies' package.json
+yq '.compilerOptions,.references' tsconfig.json
+```
+
+Diff/recency slice:
+```
+git diff --name-only
+git log --name-only -n 5
+```
+
+Complexity hot spots:
+```
+tokei --files --sort code packages
+scc --by-file -s complexity packages
+```
+
+Docs/assets (if specs live outside code):
+```
+rga -n "auth|timeout" ideas status megamerge_docs
+ugrep -R -n --ignore-files "auth|timeout" ideas status megamerge_docs
+```
+
+### Shared Slicer Library API (Draft)
+
+Intent: a single library owns all slice production. UIs only pass options and
+receive candidates and assembled output.
+
+```ts
+export type SliceStrategy =
+  | 'inventory'
+  | 'keyword'
+  | 'symbols'
+  | 'ast'
+  | 'config'
+  | 'diff'
+  | 'complexity'
+  | 'docs';
+
+export type SliceRepresentation = 'full' | 'snippet' | 'codemap' | 'reference';
+
+export type SliceIntensity = 'lite' | 'standard' | 'deep';
+
+export interface SliceRequest {
+  task: string;
+  repoRoot: string;
+  budgetTokens: number;
+  warningThreshold: number;
+  intensity: SliceIntensity;
+  strategies: SliceStrategy[];
+  include: string[];
+  exclude: string[];
+  toolAvailability: Record<string, boolean>;
+  seed?: string; // deterministic ordering
+}
+
+export interface SliceCandidate {
+  id: string;
+  path: string;
+  strategy: SliceStrategy;
+  representation: SliceRepresentation;
+  score: number;
+  tokens: number;
+  reason: string;
+  source: string; // tool or rule
+  snippet?: string;
+  codemap?: Record<string, unknown>;
+}
+
+export interface SlicePlan {
+  candidates: SliceCandidate[];
+  totalTokens: number;
+  budgetTokens: number;
+  warnings: string[];
+}
+
+export interface SliceResult {
+  selected: SliceCandidate[];
+  totalTokens: number;
+  output: string;
+}
+
+export interface SlicerEngine {
+  plan(request: SliceRequest): Promise<SlicePlan>;
+  assemble(plan: SlicePlan, budgetTokens: number): Promise<SliceResult>;
+}
+```
+
+Design rules:
+- Merge duplicate candidates by path; keep highest representation and merge reasons.
+- Downshift representation before exclusion when over budget.
+- Never let UI call tools directly; the engine owns tool execution.
+- Persist plan inputs for reproducibility (task, seed, intensity, tool availability).
+
+### Bucket Filler UI Flow (Draft)
+
+1) Collect task, budget, and base intensity.
+2) Call `engine.plan` to get candidates and per-strategy totals.
+3) Present strategy toggles and intensity sliders; show token deltas.
+4) Allow include/exclude overrides (paths or globs).
+5) Optional toggle: include previous response (latest `karl history`).
+6) Re-run `engine.plan` on change; keep results deterministic.
+7) On confirm, call `engine.assemble` and stream output to the chosen sink.
+
+UI behaviors:
+- Show a live budget bar with warning threshold.
+- Provide a "downgrade first" toggle (full -> snippet -> codemap -> reference).
+- Provide a "merge duplicates" toggle (default on).
+- Offer "preview item" using shared engine data (no new tool runs).
+
+Data contract for the UI:
+```
+plan = engine.plan(request)
+plan.candidates -> UI list
+engine.assemble(plan, budgetTokens) -> final output
+```
+
+This keeps strategy selection in the UI while all content creation remains
+in the common slicer library used by OVI.
+
 ### Integration with Karl's "Moods"
 
 The interactivity level shifts based on the active **Mood Profile**:

@@ -32,6 +32,8 @@ Built-in Commands:
   stacks                    Manage config stacks
   skills                    Manage agent skills
   info                      Show system info
+  history                   Show run history
+  previous                  Print last response
 
 Your Commands (stacks as verbs):
   karl review <task>  opus::anthropic/claude-opus-4
@@ -43,7 +45,9 @@ Flags (use with 'run'):
   --json, -j           JSON output
   --skill              Load a skill by name
   --timeout            Per-task timeout
-  --volley             Multi-task mode
+  --parent             Parent run id or reference
+  --tag                Tag the run (repeatable)
+  --no-history         Disable history logging
 ```
 
 ---
@@ -56,14 +60,15 @@ Flags (use with 'run'):
 | `--verbose`, `-v` | boolean | false | Stream thoughts/tools |
 | `--json`, `-j` | boolean | false | JSON output |
 | `--stats` | boolean | false | Print summary |
-| `--max-concurrent` | number | 3 | Max parallel tasks |
 | `--timeout` | duration | - | Per-task timeout |
 | `--skill` | string | - | Skill name |
 | `--no-tools` | boolean | false | Disable tools |
 | `--unrestricted` | boolean | false | Allow writes outside cwd |
 | `--context` | string | - | Extra system prompt |
 | `--context-file` | path | - | Context file |
-| `--volley` | boolean | false | Multi-task mode |
+| `--parent` | string | - | Parent run id or reference |
+| `--tag` | string | - | Tag the run (repeatable) |
+| `--no-history` | boolean | false | Disable history logging |
 | `--dry-run` | boolean | false | Show config only |
 
 ---
@@ -86,9 +91,7 @@ Unknown flag: --invalid
 
 Missing value for --model
 
-Multiple tasks require --volley flag.
-  Got: "task1" "task2"
-  Use: karl run --volley "task1" "task2" ...
+Multiple tasks provided. Karl accepts a single task per run.
 ```
 
 ### Resource Errors

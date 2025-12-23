@@ -6,7 +6,7 @@ Tennis theme implementation, visual identity, and messaging patterns.
 
 ## Executive Summary
 
-Karl has **strong conceptual branding** with tennis theming. The "serve-and-volley" philosophy is documented in README and ideas/. However, **implementation is minimal** - the actual CLI uses little tennis terminology beyond "volley" and the spinner animation.
+Karl has **strong conceptual branding** with tennis theming. The "serve-and-volley" philosophy is documented in README and ideas/. However, **implementation is minimal** - the actual CLI uses little tennis terminology beyond the spinner animation.
 
 **Score:** 8/10 conceptual, 4/10 implementation
 
@@ -18,7 +18,6 @@ Karl has **strong conceptual branding** with tennis theming. The "serve-and-voll
 
 | Term | Location | Usage |
 |------|----------|-------|
-| **Volley** | types.ts, scheduler.ts, cli.ts | Parallel execution mode |
 | **Tennis Ball** | oauth.ts, spinner.ts | 🎾 emoji in OAuth header and animation |
 | **Spinner Animation** | spinner.ts | 18-frame ASCII tennis player |
 
@@ -133,7 +132,7 @@ Setup incomplete. Run `karl init`.
 
 | Vision | Reality |
 |--------|---------|
-| "One serve. One ace." | Only "volley" exists |
+| "One serve. One ace." | No tennis-themed command naming |
 | Tennis-themed commands | Generic "run", "init" |
 | Speed references (140mph) | No speed metaphors |
 | Easter eggs (--karlovic) | Not implemented |
@@ -150,7 +149,6 @@ Setup incomplete. Run `karl init`.
 
 2. **Add "Serve" messaging**
    - "serving your task..." for single tasks
-   - Keep "volleying N tasks..." for parallel
 
 3. **Tennis error messages**
    - "⚠️ Let. Retrying..."

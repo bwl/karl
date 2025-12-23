@@ -40,8 +40,29 @@ interface KarlConfig {
   models: Record<string, ModelConfig>;
   providers: Record<string, ProviderConfig>;
   tools: ToolsConfig;
-  volley: VolleyConfig;
+  retry: RetryConfig;
+  history?: HistoryConfig;
   stacks?: Record<string, StackConfig>;
+}
+```
+
+### RetryConfig
+
+```typescript
+interface RetryConfig {
+  attempts: number;
+  backoff: 'exponential' | 'linear';
+}
+```
+
+### HistoryConfig
+
+```typescript
+interface HistoryConfig {
+  enabled?: boolean;
+  path?: string;
+  maxDiffBytes?: number;
+  maxDiffLines?: number;
 }
 ```
 
@@ -229,10 +250,15 @@ const DEFAULT_CONFIG: KarlConfig = {
     enabled: ['bash', 'read', 'write', 'edit'],
     custom: ['~/.config/karl/tools/*.ts']
   },
-  volley: {
-    maxConcurrent: 3,
-    retryAttempts: 3,
-    retryBackoff: 'exponential'
+  retry: {
+    attempts: 3,
+    backoff: 'exponential'
+  },
+  history: {
+    enabled: true,
+    path: '~/.config/karl/history/history.db',
+    maxDiffBytes: 20000,
+    maxDiffLines: 400
   }
 };
 ```

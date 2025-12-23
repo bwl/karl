@@ -9,7 +9,7 @@ Core execution engine implementation in `packages/karl/src/`.
 ```
 ┌─────────────────────────────────────────────────────┐
 │                     cli.ts                          │
-│              (Entry Point, 797 LOC)                 │
+│              (Entry Point, 951 LOC)                 │
 └───────────────┬─────────────────────────────────────┘
                 │
                 ├──> config.ts (166 LOC) - Load/merge config
@@ -17,13 +17,12 @@ Core execution engine implementation in `packages/karl/src/`.
                 ├──> context.ts (70 LOC) - System prompt building
                 ├──> skills.ts (344 LOC) - Agent Skills
                 ├──> hooks.ts (67 LOC) - Hook discovery
+                ├──> history.ts (new) - Run history storage
                 │
-                └──> scheduler.ts (110 LOC)
+                └──> runner.ts (302 LOC)
                      │
-                     └──> runner.ts (302 LOC)
-                          │
-                          ├──> tools.ts (402 LOC)
-                          └──> state.ts (79 LOC)
+                     ├──> tools.ts (402 LOC)
+                     └──> state.ts (79 LOC)
 ```
 
 ---
@@ -80,35 +79,7 @@ async function runWithTimeout<T>(
 
 ---
 
-### 3. scheduler.ts (Parallel Execution)
-
-**Purpose:** Manage parallel tasks with retry logic.
-
-**Class:** `VolleyScheduler`
-
-**Work-stealing queue pattern:**
-```typescript
-while (active < maxConcurrent && queue.length > 0) {
-  const item = queue.shift();
-  active++;
-  runTask(item)
-    .catch(error => {
-      if (isRetryable(error) && attempt < retryAttempts) {
-        queue.push({ ...item, attempt: attempt + 1 });
-      }
-    })
-    .finally(() => { active--; pump(); });
-}
-```
-
-**Retry Logic:**
-- Retryable errors: 408, 429, 500-504, timeouts
-- Exponential backoff: 1s -> 2s -> 4s (max 60s)
-- Max 3 attempts per task
-
----
-
-### 4. tools.ts (Tool System)
+### 3. tools.ts (Tool System)
 
 **Purpose:** Built-in tools and custom tool loading.
 
@@ -155,7 +126,7 @@ function assertWithinCwd(resolved: string, cwd: string) {
 **Purpose:** Event-driven state tracking.
 
 **Functions:**
-- `initState(tasks)` - Create initial volley state
+- `initState(tasks)` - Create initial task state
 - `applyEvent(state, event)` - Reducer for events
 
 **Event Types:**
@@ -176,14 +147,16 @@ interface CliOptions {
   model?: string;
   verbose?: boolean;
   json?: boolean;
-  maxConcurrent?: number;
   timeoutMs?: number;
   skill?: string;
   noTools?: boolean;
   unrestricted?: boolean;
   context?: string;
+  contextFile?: string;
   stack?: string;
-  volley?: boolean;
+  parent?: string;
+  tags?: string[];
+  noHistory?: boolean;
 }
 ```
 
@@ -226,8 +199,8 @@ Universal wrapper adds events and hooks to all tool executions.
 ### 4. Multi-Layer Config Merging
 Deep merge with priority: Folder > Project > Global > Default.
 
-### 5. Work-Stealing Queue
-Dynamic task distribution with retry queueing.
+### 5. Retry Loop
+Single-task retry with exponential or linear backoff.
 
 ---
 
@@ -241,7 +214,7 @@ User Input: karl run "task"
      ├─> resolveModel() -> provider & model
      ├─> buildSystemPrompt() -> assemble context
      │
-     ├─> scheduler.run([task], runTask)
+     ├─> runTaskWithRetry(task, runTask)
      │    │
      │    └─> runTask()
      │         ├─> hooks.run('pre-task')

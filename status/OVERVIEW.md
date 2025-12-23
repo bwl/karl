@@ -21,7 +21,7 @@ High-level project overview: TypeScript CLI, Bun runtime, active development, ke
 ## Architecture
 
 ### CLI_ARCHITECTURE.md
-Core execution engine in `packages/karl/src/`: cli.ts, runner.ts, scheduler.ts, tools.ts, state.ts.
+Core execution engine in `packages/karl/src/`: cli.ts, runner.ts, tools.ts, state.ts, history.ts.
 
 ### CLI_COMMANDS.md
 Interactive CLI wizards in `packages/karl/src/commands/`: init, providers, models, stacks, skills.

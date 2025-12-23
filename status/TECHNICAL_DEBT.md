@@ -50,7 +50,7 @@ return [bash, read, write, edit] as AgentTool<any, any>[];
 **Impact:** High regression risk, no automated validation.
 
 **Suggested priorities:**
-1. `scheduler.ts` - Retry logic
+1. `cli.ts` - Retry logic
 2. `config.ts` - Merging, resolution
 3. `utils.ts` - Parsing utilities
 4. `skills.ts` - Validation
