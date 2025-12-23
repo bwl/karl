@@ -15,7 +15,7 @@ import type { SupportedLanguage } from './parser.js';
  * Query patterns for each language
  * Uses tree-sitter's S-expression query syntax
  */
-export const LANGUAGE_QUERIES: Record<SupportedLanguage, string> = {
+export const LANGUAGE_QUERIES: Record<string, string> = {
   typescript: `
 ; Function declarations
 (function_declaration
@@ -387,5 +387,9 @@ export const LANGUAGE_QUERIES: Record<SupportedLanguage, string> = {
  * Get query string for a language
  */
 export function getQueryForLanguage(lang: SupportedLanguage): string {
-  return LANGUAGE_QUERIES[lang];
+  const query = LANGUAGE_QUERIES[lang];
+  if (!query) {
+    throw new Error(`No query registered for language: ${lang}`);
+  }
+  return query;
 }

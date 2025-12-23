@@ -158,23 +158,8 @@ function extractSignature(node: SyntaxNode, source: string, language: SupportedL
       firstLine = firstLine.replace(/^(export\s+)?(async\s+)?function\s+/, '');
       break;
 
-    case 'python':
-      // Remove body (colon and beyond)
-      if (firstLine.includes(':')) {
-        firstLine = firstLine.slice(0, firstLine.indexOf(':'));
-      }
-      firstLine = firstLine.replace(/^(async\s+)?def\s+/, '');
-      break;
-
     case 'rust':
       firstLine = firstLine.replace(/^(pub\s+)?(async\s+)?fn\s+/, '');
-      if (firstLine.includes('{')) {
-        firstLine = firstLine.slice(0, firstLine.indexOf('{')).trim();
-      }
-      break;
-
-    case 'go':
-      firstLine = firstLine.replace(/^func\s+/, '');
       if (firstLine.includes('{')) {
         firstLine = firstLine.slice(0, firstLine.indexOf('{')).trim();
       }

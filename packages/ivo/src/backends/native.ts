@@ -33,9 +33,9 @@ interface ExecResult {
   exitCode: number;
 }
 
-async function exec(cmd: string, args: string[]): Promise<ExecResult> {
+async function exec(cmd: string, args: string[], cwd?: string): Promise<ExecResult> {
   return new Promise((resolve) => {
-    const proc = spawn(cmd, args, { stdio: ['pipe', 'pipe', 'pipe'] });
+    const proc = spawn(cmd, args, { stdio: ['pipe', 'pipe', 'pipe'], cwd });
     let stdout = '';
     let stderr = '';
 
@@ -58,6 +58,29 @@ async function exec(cmd: string, args: string[]): Promise<ExecResult> {
  */
 function estimateTokens(content: string): number {
   return Math.ceil(content.length / 4);
+}
+
+function filterPaths(paths: string[], pattern: string, useRegex: boolean, ignoreCase?: boolean): string[] {
+  if (!pattern) return paths;
+  const normalizedPattern = ignoreCase ? pattern.toLowerCase() : pattern;
+
+  if (!useRegex) {
+    return paths.filter((path) => {
+      const target = ignoreCase ? path.toLowerCase() : path;
+      return target.includes(normalizedPattern);
+    });
+  }
+
+  try {
+    const regex = new RegExp(pattern, ignoreCase ? 'i' : undefined);
+    return paths.filter((path) => regex.test(path));
+  } catch {
+    const targetPattern = ignoreCase ? pattern.toLowerCase() : pattern;
+    return paths.filter((path) => {
+      const target = ignoreCase ? path.toLowerCase() : path;
+      return target.includes(targetPattern);
+    });
+  }
 }
 
 export class NativeBackend implements IvoBackend {
@@ -157,6 +180,35 @@ export class NativeBackend implements IvoBackend {
   // ===========================================================================
 
   async search(pattern: string, opts?: SearchOptions): Promise<SearchResult> {
+    if (opts?.mode === 'path') {
+      const result = await exec('rg', ['--files'], this.cwd);
+      let files: string[] = [];
+
+      if (result.exitCode !== 0) {
+        const fallback = await exec('find', [this.cwd, '-type', 'f']);
+        files = fallback.stdout.trim().split('\n').filter(Boolean).map((file) => relative(this.cwd, file));
+      } else {
+        files = result.stdout.trim().split('\n').filter(Boolean);
+      }
+
+      if (pattern) {
+        files = filterPaths(files, pattern, opts?.regex !== false, opts?.caseInsensitive);
+      }
+
+      if (opts?.maxResults) {
+        files = files.slice(0, opts.maxResults);
+      }
+
+      const matches = files.map((path) => ({ path, line: 0, content: '' }));
+
+      return {
+        pattern,
+        matches,
+        totalMatches: matches.length,
+        truncated: opts?.maxResults ? matches.length >= opts.maxResults : false,
+      };
+    }
+
     const args: string[] = [];
 
     // Basic options
@@ -180,11 +232,6 @@ export class NativeBackend implements IvoBackend {
       for (const ext of opts.extensions) {
         args.push('-g', `*${ext.startsWith('.') ? ext : '.' + ext}`);
       }
-    }
-
-    // Mode
-    if (opts?.mode === 'path') {
-      args.push('--files');
     }
 
     // Pattern and path

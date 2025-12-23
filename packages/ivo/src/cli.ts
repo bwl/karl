@@ -53,7 +53,7 @@ Ivo prepares optimal context before Karl executes tasks.
 Like a tennis scout who analyzes the court, Ivo identifies
 the most relevant files and builds efficient context.
 
-Currently uses RepoPrompt as the backend (requires RepoPrompt.app).`
+Backends are pluggable; use native tools or RepoPrompt when available.`
   )
   .version(VERSION, '-v, --version', 'Show version number')
   .helpOption('-h, --help', 'Show help');
