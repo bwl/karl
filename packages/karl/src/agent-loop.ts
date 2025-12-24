@@ -42,10 +42,18 @@ export interface AgentLoopConfig {
   model: string;
   baseUrl: string;
   apiKey: string;
+  providerType?: 'openai' | 'anthropic';  // API format to use
   maxTokens?: number;
   temperature?: number;
   maxToolRounds?: number;  // Safety limit for tool call loops
   signal?: AbortSignal;
+
+  // Anthropic-specific options
+  thinking?: {
+    type: 'enabled' | 'disabled';
+    budgetTokens?: number;  // Minimum 1024
+  };
+  cacheControl?: boolean;  // Enable prompt caching (90% cost savings)
 }
 
 export interface TokenUsage {
@@ -59,6 +67,8 @@ export type AgentEvent =
   | { type: 'stream_start' }
   | { type: 'text_delta'; delta: string }
   | { type: 'text_end'; text: string }
+  | { type: 'thinking_delta'; delta: string }    // Anthropic extended thinking
+  | { type: 'thinking_end'; thinking: string }   // Anthropic extended thinking complete
   | { type: 'tool_call_start'; toolCall: ToolCall }
   | { type: 'tool_call_end'; toolCall: ToolCall }
   | { type: 'tool_execution_start'; toolName: string; toolCallId: string; args: any }
@@ -70,6 +80,7 @@ export type AgentEvent =
 // Internal type for stream chunks
 type StreamChunk =
   | { type: 'text_delta'; delta: string }
+  | { type: 'thinking_delta'; delta: string }    // Anthropic extended thinking
   | { type: 'tool_call'; toolCall: ToolCall }
   | { type: 'usage'; usage: TokenUsage }
   | { type: 'error'; error: string };
@@ -88,6 +99,22 @@ type StreamChunk =
  * @yields AgentEvent - Events during execution
  * @returns Final assistant message and accumulated usage
  */
+// Track recent tool calls to detect repetitive loops
+interface RecentToolCall {
+  name: string;
+  argsHash: string;
+}
+
+function hashArgs(args: any): string {
+  try {
+    return JSON.stringify(args);
+  } catch {
+    return String(args);
+  }
+}
+
+const REPETITIVE_CALL_THRESHOLD = 3;
+
 export async function* agentLoop(
   systemPrompt: string,
   userMessage: string,
@@ -98,6 +125,9 @@ export async function* agentLoop(
   const maxToolRounds = config.maxToolRounds ?? 50;  // Default safety limit
   let toolRound = 0;
   let accumulatedUsage: TokenUsage = { input: 0, output: 0, total: 0, cost: 0 };
+
+  // Track recent tool calls to detect repetitive patterns
+  const recentToolCalls: RecentToolCall[] = [];
 
   // Add system message if provided
   if (systemPrompt) {
@@ -118,15 +148,24 @@ export async function* agentLoop(
     yield { type: 'stream_start' };
 
     let fullText = '';
+    let fullThinking = '';
     let toolCalls: ToolCall[] = [];
     let turnUsage: TokenUsage = {};
 
+    // Select stream function based on provider type
+    const streamFn = config.providerType === 'anthropic'
+      ? streamAnthropic
+      : streamOpenAI;
+
     try {
       // Stream completion from API
-      for await (const chunk of streamOpenAI(messages, tools, config)) {
+      for await (const chunk of streamFn(messages, tools, config)) {
         if (chunk.type === 'text_delta') {
           fullText += chunk.delta;
           yield { type: 'text_delta', delta: chunk.delta };
+        } else if (chunk.type === 'thinking_delta') {
+          fullThinking += chunk.delta;
+          yield { type: 'thinking_delta', delta: chunk.delta };
         } else if (chunk.type === 'tool_call') {
           toolCalls.push(chunk.toolCall);
           yield { type: 'tool_call_start', toolCall: chunk.toolCall };
@@ -144,6 +183,10 @@ export async function* agentLoop(
     } catch (error) {
       yield { type: 'error', error: error as Error };
       throw error;
+    }
+
+    if (fullThinking) {
+      yield { type: 'thinking_end', thinking: fullThinking };
     }
 
     if (fullText) {
@@ -190,6 +233,29 @@ export async function* agentLoop(
         args = JSON.parse(toolCall.function.arguments);
       } catch {
         args = {};
+      }
+
+      // Check for repetitive tool calls (same tool + same args N times in a row)
+      const currentCall: RecentToolCall = { name: tool.name, argsHash: hashArgs(args) };
+      recentToolCalls.push(currentCall);
+
+      // Keep only the last N calls for comparison
+      if (recentToolCalls.length > REPETITIVE_CALL_THRESHOLD) {
+        recentToolCalls.shift();
+      }
+
+      // Check if last N calls are identical
+      if (recentToolCalls.length >= REPETITIVE_CALL_THRESHOLD) {
+        const lastCalls = recentToolCalls.slice(-REPETITIVE_CALL_THRESHOLD);
+        const allIdentical = lastCalls.every(
+          call => call.name === currentCall.name && call.argsHash === currentCall.argsHash
+        );
+
+        if (allIdentical) {
+          const errorMsg = `Tried running ${tool.name} with the same arguments ${REPETITIVE_CALL_THRESHOLD} times in a row. There is probably something wrong.`;
+          yield { type: 'error', error: new Error(errorMsg) };
+          throw new Error(errorMsg);
+        }
       }
 
       yield { type: 'tool_execution_start', toolName: tool.name, toolCallId: toolCall.id, args };
@@ -450,4 +516,326 @@ function formatMessagesForOpenAI(messages: Message[]): any[] {
 
     return formatted;
   });
+}
+
+// ============================================================================
+// Anthropic Native API Implementation
+// ============================================================================
+
+/**
+ * Extract system prompt from messages (Anthropic uses separate system parameter).
+ */
+function extractSystemPrompt(messages: Message[]): string | undefined {
+  const systemMsg = messages.find(m => m.role === 'system');
+  return systemMsg?.content;
+}
+
+/**
+ * Format messages for Anthropic API format.
+ * Anthropic uses content blocks and different tool result format.
+ */
+function formatMessagesForAnthropic(messages: Message[]): any[] {
+  const result: any[] = [];
+
+  for (const m of messages) {
+    // Skip system messages (handled separately)
+    if (m.role === 'system') continue;
+
+    if (m.role === 'tool') {
+      // Anthropic expects tool results as user messages with tool_result content blocks
+      // Find or create the user message to append this result to
+      const lastMsg = result[result.length - 1];
+      const toolResultBlock = {
+        type: 'tool_result',
+        tool_use_id: m.tool_call_id,
+        content: m.content
+      };
+
+      if (lastMsg?.role === 'user' && Array.isArray(lastMsg.content)) {
+        // Append to existing user message with tool results
+        lastMsg.content.push(toolResultBlock);
+      } else {
+        // Create new user message for tool results
+        result.push({
+          role: 'user',
+          content: [toolResultBlock]
+        });
+      }
+    } else if (m.role === 'assistant') {
+      const content: any[] = [];
+
+      // Add text content if present
+      if (m.content) {
+        content.push({ type: 'text', text: m.content });
+      }
+
+      // Add tool use blocks
+      if (m.tool_calls) {
+        for (const tc of m.tool_calls) {
+          content.push({
+            type: 'tool_use',
+            id: tc.id,
+            name: tc.function.name,
+            input: JSON.parse(tc.function.arguments || '{}')
+          });
+        }
+      }
+
+      result.push({
+        role: 'assistant',
+        content: content.length > 0 ? content : [{ type: 'text', text: '' }]
+      });
+    } else if (m.role === 'user') {
+      result.push({
+        role: 'user',
+        content: m.content
+      });
+    }
+  }
+
+  return result;
+}
+
+/**
+ * Stream a completion from Anthropic's native API.
+ */
+async function* streamAnthropic(
+  messages: Message[],
+  tools: ToolDefinition[],
+  config: AgentLoopConfig
+): AsyncGenerator<StreamChunk> {
+  const systemPrompt = extractSystemPrompt(messages);
+
+  const body: Record<string, any> = {
+    model: config.model,
+    max_tokens: config.maxTokens ?? 4096,
+    messages: formatMessagesForAnthropic(messages),
+    stream: true
+  };
+
+  // Add system prompt (can be string or array of content blocks)
+  if (systemPrompt) {
+    if (config.cacheControl) {
+      // Use content blocks with cache_control for prompt caching
+      body.system = [{
+        type: 'text',
+        text: systemPrompt,
+        cache_control: { type: 'ephemeral' }
+      }];
+    } else {
+      body.system = systemPrompt;
+    }
+  }
+
+  // Add tools with Anthropic format (input_schema instead of parameters)
+  if (tools.length > 0) {
+    body.tools = tools.map((t, index) => {
+      const tool: Record<string, any> = {
+        name: t.name,
+        description: t.description,
+        input_schema: sanitizeSchema(t.parameters)
+      };
+      // Only apply cache_control to the last tool (caches all tools up to this point)
+      // Anthropic limits cache_control to 4 blocks max
+      if (config.cacheControl && index === tools.length - 1) {
+        tool.cache_control = { type: 'ephemeral' };
+      }
+      return tool;
+    });
+  }
+
+  // Add extended thinking if configured
+  if (config.thinking?.type === 'enabled') {
+    body.thinking = {
+      type: 'enabled',
+      budget_tokens: config.thinking.budgetTokens ?? 4096
+    };
+  }
+
+  if (config.temperature !== undefined) {
+    body.temperature = config.temperature;
+  }
+
+  // Detect OAuth vs API key based on token format
+  // OAuth tokens: sk-ant-oat01-... (OAuth access token)
+  // API keys: sk-ant-api... (regular API key)
+  const isOAuthToken = config.apiKey.startsWith('sk-ant-oat');
+
+  const headers: Record<string, string> = {
+    'Content-Type': 'application/json',
+    'anthropic-version': '2023-06-01'
+  };
+
+  if (isOAuthToken) {
+    // OAuth authentication uses Bearer token with oauth beta header
+    headers['Authorization'] = `Bearer ${config.apiKey}`;
+    headers['anthropic-beta'] = 'oauth-2025-04-20';
+  } else {
+    // Standard API key authentication
+    headers['x-api-key'] = config.apiKey;
+  }
+
+  // Add additional beta headers
+  const betaFeatures: string[] = [];
+  if (isOAuthToken) betaFeatures.push('oauth-2025-04-20');
+  if (config.cacheControl) betaFeatures.push('prompt-caching-2024-07-31');
+  if (betaFeatures.length > 0) {
+    headers['anthropic-beta'] = betaFeatures.join(',');
+  }
+
+  const response = await fetch(`${config.baseUrl}/v1/messages`, {
+    method: 'POST',
+    headers,
+    body: JSON.stringify(body),
+    signal: config.signal
+  });
+
+  if (!response.ok) {
+    const errorText = await response.text();
+    let errorMessage = `Anthropic API error ${response.status}`;
+    try {
+      const errorJson = JSON.parse(errorText);
+      errorMessage = errorJson.error?.message || errorJson.message || errorMessage;
+    } catch {
+      if (errorText) errorMessage += `: ${errorText.slice(0, 200)}`;
+    }
+    yield { type: 'error', error: errorMessage };
+    return;
+  }
+
+  if (!response.body) {
+    yield { type: 'error', error: 'No response body' };
+    return;
+  }
+
+  // Parse Anthropic SSE stream
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = '';
+
+  // Track content blocks by index for tool use accumulation
+  const contentBlocks: Map<number, { type: string; id?: string; name?: string; input: string }> = new Map();
+  let inputTokens = 0;
+  let outputTokens = 0;
+
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+
+      buffer += decoder.decode(value, { stream: true });
+      const lines = buffer.split('\n');
+      buffer = lines.pop() || '';
+
+      for (const line of lines) {
+        const trimmed = line.trim();
+
+        // Parse event type line
+        if (trimmed.startsWith('event: ')) {
+          continue;  // Event type is in the data line
+        }
+
+        if (!trimmed.startsWith('data: ')) continue;
+
+        const data = trimmed.slice(6);
+        if (!data) continue;
+
+        try {
+          const event = JSON.parse(data);
+
+          switch (event.type) {
+            case 'message_start':
+              // Initial message with input token count
+              if (event.message?.usage?.input_tokens) {
+                inputTokens = event.message.usage.input_tokens;
+              }
+              break;
+
+            case 'content_block_start':
+              // New content block starting
+              const block = event.content_block;
+              if (block.type === 'tool_use') {
+                contentBlocks.set(event.index, {
+                  type: 'tool_use',
+                  id: block.id,
+                  name: block.name,
+                  input: ''
+                });
+              } else if (block.type === 'thinking') {
+                contentBlocks.set(event.index, {
+                  type: 'thinking',
+                  input: ''
+                });
+              } else if (block.type === 'text') {
+                contentBlocks.set(event.index, {
+                  type: 'text',
+                  input: ''
+                });
+              }
+              break;
+
+            case 'content_block_delta':
+              const delta = event.delta;
+              if (delta.type === 'text_delta') {
+                yield { type: 'text_delta', delta: delta.text };
+              } else if (delta.type === 'thinking_delta') {
+                yield { type: 'thinking_delta', delta: delta.thinking };
+              } else if (delta.type === 'input_json_delta') {
+                // Accumulate tool input JSON
+                const existing = contentBlocks.get(event.index);
+                if (existing) {
+                  existing.input += delta.partial_json;
+                }
+              }
+              break;
+
+            case 'content_block_stop':
+              // Block complete - emit tool calls if applicable
+              const completedBlock = contentBlocks.get(event.index);
+              if (completedBlock?.type === 'tool_use' && completedBlock.id && completedBlock.name) {
+                yield {
+                  type: 'tool_call',
+                  toolCall: {
+                    id: completedBlock.id,
+                    type: 'function',
+                    function: {
+                      name: completedBlock.name,
+                      arguments: completedBlock.input || '{}'
+                    }
+                  }
+                };
+              }
+              break;
+
+            case 'message_delta':
+              // Final delta with output tokens and stop reason
+              if (event.usage?.output_tokens) {
+                outputTokens = event.usage.output_tokens;
+              }
+              break;
+
+            case 'message_stop':
+              // Stream complete - emit usage
+              yield {
+                type: 'usage',
+                usage: {
+                  input: inputTokens,
+                  output: outputTokens,
+                  total: inputTokens + outputTokens
+                }
+              };
+              break;
+
+            case 'error':
+              yield { type: 'error', error: event.error?.message || 'Unknown Anthropic error' };
+              break;
+          }
+        } catch {
+          // Ignore JSON parse errors in stream
+        }
+      }
+    }
+  } finally {
+    reader.releaseLock();
+  }
 }

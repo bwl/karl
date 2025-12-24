@@ -79,6 +79,12 @@ export interface HistoryConfig {
   path?: string;
   maxDiffBytes?: number;
   maxDiffLines?: number;
+  showId?: boolean;           // Show history ID after runs (default false)
+}
+
+export interface ThinkingConfig {
+  enabled: boolean;           // Enable extended thinking
+  budgetTokens?: number;      // Token budget for thinking (min 1024, default 4096)
 }
 
 export interface StackConfig {
@@ -92,6 +98,9 @@ export interface StackConfig {
   context?: string;           // Inline context
   contextFile?: string;       // Path to context file
   unrestricted?: boolean;     // Bypass guardrails
+  tools?: string[];           // Limit tools to these (e.g., ["read", "bash"])
+  thinking?: ThinkingConfig;  // Extended thinking (Anthropic only)
+  cacheControl?: boolean;     // Enable prompt caching (Anthropic only)
 }
 
 export interface AgentConfig {
@@ -128,9 +137,13 @@ export interface CliOptions {
   parent?: string;
   tags?: string[];
   noHistory?: boolean;
+  showHistoryId?: boolean;    // Show history ID after run
   background?: boolean;       // Run in background, return job ID
   plain?: boolean;
   visuals?: string;
+  tools?: string[];           // Limit tools (from stack config)
+  thinking?: ThinkingConfig;  // Extended thinking (Anthropic only)
+  cacheControl?: boolean;     // Enable prompt caching (Anthropic only)
 }
 
 export interface ToolDiff {

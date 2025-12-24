@@ -6,6 +6,7 @@
  */
 
 import { spawn } from 'child_process';
+import { join } from 'path';
 import { agentLoop, type AgentLoopConfig, type ToolDefinition, type Message } from './agent-loop.js';
 import type { KarlConfig } from './types.js';
 import { resolveAgentModel } from './config.js';
@@ -17,17 +18,21 @@ import { getProviderOAuthToken } from './oauth.js';
 
 export interface OrchestratorState {
   messages: Message[];
-  model: string;
+  model: string;      // The raw model ID
+  modelAlias: string; // The user-configured alias
   provider: string;
   isStreaming: boolean;
 }
 
 export type OrchestratorEvent =
   | { type: 'thinking'; text: string }
+  | { type: 'ivo_start'; task: string }
+  | { type: 'ivo_end'; contextId: string; files: number; tokens: number; budget: number }
   | { type: 'karl_start'; command: string; task: string }
   | { type: 'karl_output'; chunk: string }
   | { type: 'karl_end'; result: string; success: boolean; durationMs: number }
   | { type: 'response'; text: string }
+  | { type: 'usage'; tokens: { input?: number; output?: number; total?: number } }
   | { type: 'error'; error: Error }
   | { type: 'done' };
 
@@ -37,55 +42,224 @@ type Listener = (event: OrchestratorEvent) => void;
 // System Prompt
 // ============================================================================
 
-const ORCHESTRATOR_SYSTEM_PROMPT = `You are an orchestrator that accomplishes tasks by running karl commands.
+const ORCHESTRATOR_SYSTEM_PROMPT = `You are an orchestrator that accomplishes goals by delegating to karl.
 
-## Your Tool
+## Your Role
 
-You have one tool: \`karl\` - which runs karl CLI commands.
+You don't write code directly. You think strategically, then delegate to karl.
+Each karl call is a focused, self-contained task. Karl has tools (bash, read, write, edit) and reasoning.
 
-Examples:
-- karl(command: "run", task: "build a login form")
-- karl(command: "think", task: "design architecture for X")
-- karl(command: "debug", task: "fix the test failures")
-- karl(command: "continue", task: "now add tests") - chains from previous run
+## Your Tools
 
-## Available Karl Commands
+### ivo_context(keywords)
 
-- \`run\` - Execute a task (default stack)
-- \`think\` - Reason through a problem (if stack exists)
-- \`debug\` - Investigate and fix issues (if stack exists)
-- \`continue\` - Chain from the previous karl run
-- \`<stack>\` - Use any named stack (review, build, etc.)
+Search the codebase for keywords and gather relevant context.
+Returns a context_id (not the full content - that stays internal).
 
-## Flags
+**IMPORTANT:** This is keyword search, not magic translation. Include synonyms!
 
-Common flags you can pass:
-- \`--verbose\` or \`-v\` - Stream thoughts and tool calls
-- \`--timeout 10m\` - Set timeout (default 2 minutes)
-- \`--continue\` or \`-c\` - Chain from last run (alternative to continue command)
+**Examples:**
+\`\`\`
+ivo_context("auth, login, session, jwt, token")      // Good - synonyms
+ivo_context("authentication")                         // Basic - fewer matches
+ivo_context("cache, redis, store, persist, ttl")     // Feature area
+ivo_context("timeout, error, retry, connection")     // Bug hunting
+\`\`\`
 
-## Strategy
+**Use for:**
+- Complex multi-file tasks
+- Understanding unfamiliar code areas
+- When you need broad context before implementing
 
-1. Break complex requests into manageable steps
-2. Use karl to accomplish each step
-3. Chain results using "continue" command when building on previous work
-4. Ask karl to verify/test when appropriate
+### karl(command, task, context_id?)
 
-## Important Notes
+Run karl with optional prepared context.
 
-- Karl tasks can take several minutes - be patient
-- Each karl call is stateless unless you use continue/--continue
-- You cannot read or write files directly - delegate everything to karl
-- Focus on high-level coordination, let karl handle the details`;
+**Commands:**
+- \`run\` - General purpose coding agent (default)
+- \`read\` - Read files: \`karl("read", "src/app.ts")\`
+- \`bash\` - Run shell commands: \`karl("bash", "git status")\`
+- \`glob\` - Find files: \`karl("glob", "**/*.ts")\`
+- \`grep\` - Search code: \`karl("grep", "UserService")\`
+- \`think\` - Deep analysis without making changes
+- \`review\` - Code review
+
+**Without context:**
+\`\`\`
+karl("grep", "handleTimeout")
+karl("read", "src/auth.ts")
+karl("run", "Fix null check on line 42")
+\`\`\`
+
+**With prepared context:**
+\`\`\`
+ivo_context("auth, login, session, jwt, token")
+karl("run", "Fix the timeout bug", "a7b2c3d")
+karl("run", "Add retry logic", "a7b2c3d")  // Reuse same context
+\`\`\`
+
+## Patterns
+
+**Simple tasks** - direct karl calls:
+\`\`\`
+karl("bash", "npm test")
+karl("read", "README.md")
+karl("grep", "AuthService")
+\`\`\`
+
+**Complex tasks** - gather context first:
+\`\`\`
+ivo_context("cache, redis, store, memory, ttl")
+karl("run", "Implement cache layer", context_id)
+karl("bash", "npm test")
+\`\`\`
+
+## Tips
+
+- Skip ivo_context for quick reads/greps/simple changes
+- Use ivo_context when spanning multiple files or unfamiliar areas
+- Include synonyms in keywords for better coverage (you are the thesaurus!)
+- Reuse context_id for related changes in the same area
+- Context stays internal - you only see summaries`;
+
+
+// ============================================================================
+// Ivo Context Tool
+// ============================================================================
+
+type Emitter = (event: OrchestratorEvent) => void;
+
+interface IvoResult {
+  contextId: string;
+  files: number;
+  tokens: number;
+  budget: number;
+}
+
+/**
+ * Get path to ivo context file.
+ */
+function getIvoContextPath(contextId: string): string {
+  return join(process.cwd(), '.ivo', 'contexts', `${contextId}.xml`);
+}
+
+/**
+ * Call ivo context and parse the output.
+ * ivo saves context to .ivo/contexts/{id}.xml and outputs:
+ * "a7b2c3d  45 files  28.5k tokens  (89% of 32k)"
+ */
+async function runIvoContext(keywords: string, budget: number): Promise<IvoResult> {
+  return new Promise((resolve, reject) => {
+    const child = spawn('ivo', ['context', keywords, '--budget', String(budget)], {
+      stdio: ['pipe', 'pipe', 'pipe'],
+      env: { ...process.env, FORCE_COLOR: '0' }
+    });
+
+    let stdout = '';
+    let stderr = '';
+
+    child.stdout?.on('data', (data: Buffer) => {
+      stdout += data.toString();
+    });
+
+    child.stderr?.on('data', (data: Buffer) => {
+      stderr += data.toString();
+    });
+
+    child.on('close', (code) => {
+      if (code !== 0) {
+        reject(new Error(stderr || `ivo exited with code ${code}`));
+        return;
+      }
+
+      // Parse output: "a7b2c3d  45 files  28.5k tokens  (89% of 32k)"
+      const idMatch = stdout.match(/^([a-f0-9]{7})/);
+      const filesMatch = stdout.match(/(\d+)\s+files/);
+      const tokensMatch = stdout.match(/([\d.]+)k?\s+tokens/);
+
+      if (!idMatch) {
+        reject(new Error('Failed to parse context ID from ivo output'));
+        return;
+      }
+
+      const contextId = idMatch[1];
+      const files = filesMatch ? parseInt(filesMatch[1], 10) : 0;
+      let tokens = 0;
+      if (tokensMatch) {
+        const val = parseFloat(tokensMatch[1]);
+        tokens = tokensMatch[0].includes('k') ? Math.round(val * 1000) : Math.round(val);
+      }
+
+      resolve({ contextId, files, tokens, budget });
+    });
+
+    child.on('error', (error) => {
+      reject(new Error(`Error spawning ivo: ${error.message}`));
+    });
+  });
+}
+
+function createIvoContextTool(emit: Emitter): ToolDefinition {
+  return {
+    name: 'ivo_context',
+    description: 'Search the codebase for keywords and gather relevant context. Returns a context_id to pass to karl(). Include synonyms for better coverage - this is keyword search, not magic translation.',
+    parameters: {
+      type: 'object',
+      properties: {
+        keywords: {
+          type: 'string',
+          description: 'Comma-separated keywords to search for. Include synonyms! Example: "auth, login, session, jwt, token"'
+        },
+        budget: {
+          type: 'number',
+          description: 'Token budget limit (default: 32000)'
+        }
+      },
+      required: ['keywords']
+    },
+    execute: async (_toolCallId, params) => {
+      const { keywords, budget = 32000 } = params as { keywords: string; budget?: number };
+
+      emit({ type: 'ivo_start', task: keywords });
+
+      try {
+        const result = await runIvoContext(keywords, budget);
+
+        emit({
+          type: 'ivo_end',
+          contextId: result.contextId,
+          files: result.files,
+          tokens: result.tokens,
+          budget
+        });
+
+        const budgetUsage = budget > 0 ? `${((result.tokens / budget) * 100).toFixed(0)}%` : 'N/A';
+        return {
+          content: [{
+            type: 'text',
+            text: `Context ready: ${result.contextId}\nFiles: ${result.files} | Tokens: ${result.tokens}/${budget} (${budgetUsage})`
+          }]
+        };
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        emit({ type: 'ivo_end', contextId: '', files: 0, tokens: 0, budget });
+        return {
+          content: [{ type: 'text', text: `Error gathering context: ${message}` }],
+          isError: true
+        };
+      }
+    }
+  };
+}
 
 // ============================================================================
 // Karl Tool
 // ============================================================================
 
-function createKarlTool(emit: (event: OrchestratorEvent) => void, signal?: AbortSignal): ToolDefinition {
+function createKarlTool(emit: Emitter, signal?: AbortSignal): ToolDefinition {
   return {
     name: 'karl',
-    description: 'Run a karl command to accomplish a task. Karl is a coding agent with access to bash, read, write, and edit tools.',
+    description: 'Run a karl command to accomplish a task. Karl is a coding agent with access to bash, read, write, and edit tools. Optionally pass a context_id from ivo_prepare to include prepared context.',
     parameters: {
       type: 'object',
       properties: {
@@ -97,6 +271,10 @@ function createKarlTool(emit: (event: OrchestratorEvent) => void, signal?: Abort
           type: 'string',
           description: 'The task description or prompt for karl'
         },
+        context_id: {
+          type: 'string',
+          description: 'Context ID from ivo_prepare (e.g., "a7b2c3d"). Karl will load the prepared context internally.'
+        },
         flags: {
           type: 'array',
           items: { type: 'string' },
@@ -106,13 +284,25 @@ function createKarlTool(emit: (event: OrchestratorEvent) => void, signal?: Abort
       required: ['command', 'task']
     },
     execute: async (_toolCallId, params) => {
-      const { command, task, flags = [] } = params as { command: string; task: string; flags?: string[] };
+      const { command, task, context_id, flags = [] } = params as {
+        command: string;
+        task: string;
+        context_id?: string;
+        flags?: string[];
+      };
       const startTime = Date.now();
 
       emit({ type: 'karl_start', command, task });
 
       return new Promise((resolve) => {
         const args = [command, task, ...flags];
+
+        // Add context file if context_id provided (loads from .ivo/contexts/)
+        if (context_id) {
+          const contextPath = getIvoContextPath(context_id);
+          args.push('--context-file', contextPath);
+        }
+
         const child = spawn('karl', args, {
           stdio: ['pipe', 'pipe', 'pipe'],
           env: { ...process.env, FORCE_COLOR: '0' }
@@ -185,6 +375,7 @@ export class Orchestrator {
     this.state = {
       messages: [],
       model: resolved.model,
+      modelAlias: resolved.modelKey,
       provider: resolved.providerKey,
       isStreaming: false
     };
@@ -244,22 +435,42 @@ export class Orchestrator {
         throw new Error(`No credentials found for provider: ${resolved.providerKey}`);
       }
 
-      if (!resolved.providerConfig.baseUrl) {
+      // Determine provider type and base URL
+      const providerType = resolved.providerConfig.type === 'anthropic' ? 'anthropic' : 'openai';
+      let baseUrl = resolved.providerConfig.baseUrl;
+
+      // Default baseUrl for Anthropic providers
+      if (!baseUrl && providerType === 'anthropic') {
+        baseUrl = 'https://api.anthropic.com';
+      }
+
+      if (!baseUrl) {
         throw new Error(`No baseUrl for provider: ${resolved.providerKey}`);
       }
 
       const loopConfig: AgentLoopConfig = {
         model: resolved.model,
-        baseUrl: resolved.providerConfig.baseUrl,
+        baseUrl,
         apiKey,
-        maxToolRounds: 20,
-        signal: this.abortController.signal
+        providerType,
+        maxToolRounds: 100,  // High limit since orchestrator uses karl tool calls for everything
+        signal: this.abortController.signal,
+        // Enable extended thinking for orchestrator (benefits from deep reasoning)
+        // max_tokens must be > thinking.budgetTokens per Anthropic API requirements
+        thinking: providerType === 'anthropic' ? { type: 'enabled', budgetTokens: 8192 } : undefined,
+        maxTokens: providerType === 'anthropic' ? 16384 : undefined,
+        // Enable prompt caching for cost savings
+        cacheControl: providerType === 'anthropic'
       };
 
-      const karlTool = createKarlTool(
-        (event) => this.emit(event),
-        this.abortController.signal
-      );
+      // Tools: ivo_prepare and karl
+      const emit = (event: OrchestratorEvent) => this.emit(event);
+      const signal = this.abortController.signal;
+
+      const tools = [
+        createIvoContextTool(emit),
+        createKarlTool(emit, signal)
+      ];
 
       // Build full message history for agent loop
       // Note: agentLoop takes systemPrompt + userMessage, but we need multi-turn
@@ -272,7 +483,7 @@ export class Orchestrator {
       const loop = agentLoop(
         ORCHESTRATOR_SYSTEM_PROMPT,
         fullPrompt,
-        [karlTool],
+        tools,
         loopConfig
       );
 
@@ -299,6 +510,10 @@ export class Orchestrator {
             break;
 
           case 'turn_end':
+            // Emit usage if available
+            if (event.usage) {
+              this.emit({ type: 'usage', tokens: event.usage });
+            }
             // Add assistant response to history
             if (event.message.content) {
               this.state.messages.push({
@@ -306,6 +521,13 @@ export class Orchestrator {
                 content: event.message.content
               });
               this.emit({ type: 'response', text: event.message.content });
+            }
+            break;
+
+          case 'message_end':
+            // Emit usage for each message (intermediate turns)
+            if (event.usage) {
+              this.emit({ type: 'usage', tokens: event.usage });
             }
             break;
 

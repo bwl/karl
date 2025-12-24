@@ -30,6 +30,8 @@ export interface RunTaskParams {
   maxTokens?: number;
   maxToolRounds?: number;
   contextLength?: number;
+  thinking?: { enabled: boolean; budgetTokens?: number };  // Extended thinking
+  cacheControl?: boolean;                                   // Prompt caching
   onEvent?: (event: SchedulerEvent) => void;
   onDiff?: (diff: ToolDiff) => void;
   diffConfig?: { maxBytes?: number; maxLines?: number };
@@ -127,19 +129,34 @@ export async function runTask(params: RunTaskParams): Promise<TaskResult> {
       tools = adaptTools([...filteredBuiltins, ...customTools]);
     }
 
+    // Determine provider type and base URL
+    const providerType = params.providerType === 'anthropic' ? 'anthropic' : 'openai';
+    let baseUrl = params.baseUrl;
+
+    // Default baseUrl for Anthropic providers
+    if (!baseUrl && providerType === 'anthropic') {
+      baseUrl = 'https://api.anthropic.com';
+    }
+
     // Validate we have a base URL
-    if (!params.baseUrl) {
+    if (!baseUrl) {
       throw new Error(`No baseUrl configured for provider: ${params.providerKey}`);
     }
 
     // Build agent loop config
     const config: AgentLoopConfig = {
       model: params.model,
-      baseUrl: params.baseUrl,
+      baseUrl,
       apiKey: params.apiKey,
+      providerType,
       maxTokens: params.maxTokens,
       maxToolRounds: params.maxToolRounds ?? 50,
-      signal: params.timeoutMs ? new AbortController().signal : undefined
+      signal: params.timeoutMs ? new AbortController().signal : undefined,
+      // Anthropic-specific features
+      thinking: params.thinking?.enabled
+        ? { type: 'enabled', budgetTokens: params.thinking.budgetTokens }
+        : undefined,
+      cacheControl: params.cacheControl
     };
 
     const controller = params.timeoutMs ? new AbortController() : null;

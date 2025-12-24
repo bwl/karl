@@ -40,6 +40,7 @@ const BUILTIN_COMMANDS = new Set([
   'models',    // Model management
   'stacks',    // Stack management
   'skills',    // Skill management
+  'config',    // Config TUI/JSON
   'info',      // System info
   'status',    // Alias for info
   'history',   // Run history
@@ -232,6 +233,7 @@ Commands:
   models                    Manage models
   stacks                    Manage config stacks
   skills                    Manage agent skills
+  config                    Config TUI and JSON views
   info                      Show system info
   history                   Show run history
   jobs                      List background jobs
@@ -291,6 +293,7 @@ Built-in Commands:
   models                    Manage models (add, remove, list)
   stacks                    Manage config stacks
   skills                    Manage agent skills
+  config                    Config TUI and JSON views
   info                      Show system info (alias: status)
   history                   Show run history (alias: logs)
   previous                  Print last response (aliases: prev, last)
@@ -330,6 +333,7 @@ Providers Commands:
   karl providers list           List configured providers
   karl providers add [name]     Add a new provider
   karl providers remove <name>  Remove a provider
+  karl providers edit <name>    Edit a provider file
   karl providers login [name]   Login to OAuth provider
   karl providers logout <name>  Logout from OAuth provider
 
@@ -337,13 +341,21 @@ Models Commands:
   karl models list              List configured models
   karl models add [alias]       Add a new model (interactive)
   karl models remove <alias>    Remove a model
+  karl models edit <alias>      Edit a model file
   karl models default <alias>   Set the default model
+
+Config Commands:
+  karl config                   Launch the config TUI
+  karl config show              Show merged config JSON
+  karl config edit              Edit config in $EDITOR
+  karl config set               Update config fields
 
 Stacks Commands:
   karl stacks list              List available stacks
   karl stacks show <name>       Show stack details
   karl stacks create <name>     Create a new stack
-  karl stacks edit <name>       Edit a stack
+  karl stacks edit <name>       Edit a stack in $EDITOR
+  karl stacks set <name>        Update stack fields
   karl stacks remove <name>     Remove a stack (not 'default')
 
 Skills Commands:
@@ -468,6 +480,9 @@ function parseArgs(argv: string[]): { options: CliOptions; tasks: (string | null
       }
       case '--no-history':
         options.noHistory = true;
+        break;
+      case '--show-history':
+        options.showHistoryId = true;
         break;
       case '--plain':
         options.plain = true;
@@ -595,6 +610,29 @@ async function main() {
     return;
   }
 
+  // Easter egg: karl boo (like ghostty ++boo)
+  if (firstArg === 'boo' || firstArg === '++boo') {
+    console.log(`
+                       o
+                      /|\\
+                     / | \\
+                       |
+       ╦╔═ ╔═╗ ╦═╗ ╦        .    *    .
+       ╠╩╗ ╠═╣ ╠╦╝ ║      *   \\o/   *
+       ╩ ╩ ╩ ╩ ╩╚═ ╩═╝        |
+           ┌────────────────/ \\───────┐
+           │    ═══════════════════   │
+           │   │   │   │   │   │   │  │
+           │   │   │   │   │   │   │  │
+           │   │   │   │   │   │   │  │
+           │   │   │   │   │   │   │  │
+           │   │   │   │   │   │   │  │
+           └───┴───┴───┴───┴───┴───┴──┘
+                  🎾 GAME ON 🎾
+`);
+    return;
+  }
+
   // No args = show help
   if (!firstArg) {
     await printOverview();
@@ -646,6 +684,12 @@ async function main() {
   else if (firstArg === 'stacks') {
     const { handleStacksCommand } = await import('./commands/stacks.js');
     await handleStacksCommand(args.slice(1));
+    return;
+  }
+  // Handle 'config' command
+  else if (firstArg === 'config') {
+    const { handleConfigCommand } = await import('./commands/config.js');
+    await handleConfigCommand(args.slice(1));
     return;
   }
   // Handle 'info' command
@@ -1058,12 +1102,16 @@ async function main() {
           baseUrl: resolvedModel.providerConfig?.baseUrl,
           systemPrompt,
           hooks,
-          toolsConfig: config.tools,
+          toolsConfig: effectiveOptions.tools
+            ? { enabled: effectiveOptions.tools, custom: config.tools.custom }
+            : config.tools,
           noTools: effectiveOptions.noTools,
           unrestricted: effectiveOptions.unrestricted,
           timeoutMs: effectiveOptions.timeoutMs,
           maxTokens: effectiveOptions.maxTokens ?? resolvedModel.maxTokens,
           contextLength: resolvedModel.contextLength,
+          thinking: effectiveOptions.thinking,
+          cacheControl: effectiveOptions.cacheControl,
           onEvent,
           onDiff,
           diffConfig
@@ -1123,7 +1171,10 @@ async function main() {
           parentId,
           tags: effectiveOptions.tags
         });
-        console.error(`History: ${historyId}`);
+        const showHistoryId = effectiveOptions.showHistoryId ?? config.history?.showId ?? false;
+        if (showHistoryId) {
+          console.error(`History: ${historyId}`);
+        }
       } catch (error) {
         console.error(`History error: ${formatError(error)}`);
       }
