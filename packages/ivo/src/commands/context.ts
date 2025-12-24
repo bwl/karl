@@ -1,81 +1,70 @@
 /**
  * Context Command - Build optimal context for a task
  *
- * This is the main feature of Ivo - using AI-powered exploration
- * to select the most relevant files for a task.
+ * Builds context and saves to .ivo/contexts/{id}.xml
+ * Returns a summary with git-style ID for passing to karl.
  */
 
 import type { Command } from 'commander';
 import type { IvoBackend } from '../backends/types.js';
-import type { ContextHistoryOptions, ContextOptions, OutputFormat } from '../types.js';
+import type { ContextOptions, OutputFormat } from '../types.js';
 import { formatContext } from '../output/index.js';
-import { loadHistoryContext } from '../history.js';
+import { saveContext } from '../context-store.js';
 
 export function registerContextCommand(program: Command, getBackend: () => Promise<IvoBackend>): void {
   program
-    .command('context [task]')
+    .command('context [keywords]')
     .alias('ctx')
-    .description('Build optimal context for a task using AI-powered exploration')
-    .option('-f, --format <format>', 'Output format: xml, markdown, or json', 'xml')
+    .description('Build context by searching for keywords in the codebase')
     .option('-b, --budget <n>', 'Token budget limit', parseInt)
-    .option('-p, --plan', 'Include implementation plan')
-    .option('--question', 'Ask a question about the codebase')
-    .option('--include <items>', 'What to include: prompt,selection,code,files,tree,tokens,history', (v) =>
-      v.split(',')
-    )
-    .option('--history', 'Include recent run history')
-    .option('--history-id <id>', 'Include a specific history entry by id')
-    .option('--history-limit <n>', 'Max history entries to include', parseInt)
-    .option('--history-full', 'Include full history records')
-    .option('--history-tag <tag>', 'Filter history by tag (repeatable)', collect)
-    .option('--history-status <status>', 'Filter history by status (success|error)')
-    .option('--history-stack <name>', 'Filter history by stack')
-    .option('--history-model <name>', 'Filter history by model key')
-    .option('--history-skill <name>', 'Filter history by skill')
-    .option('--snapshot', 'Get current context snapshot (no AI exploration)')
+    .option('-f, --format <format>', 'Output format: xml, markdown, or json', 'xml')
+    .option('--full', 'Output full context instead of summary + ID')
+    .option('--snapshot', 'Get current context snapshot (no keyword search)')
     .addHelpText(
       'after',
       `
+Keywords:
+  Ivo searches your codebase for the keywords you provide. There is no magic
+  translation - include synonyms and related terms for better coverage.
+
+  Good:  "auth, login, session, jwt, token, credentials"
+  Basic: "authentication"
+
+  Up to 12 keywords are used. Stopwords (the, and, for, etc.) are ignored.
+
 Examples:
-  # Build context for a task with AI exploration
-  ivo context "Fix the authentication timeout bug"
+  # Search with synonyms for best coverage
+  ivo context "auth, login, session, jwt, token"
+  # Output: a7b2c3d  45 files  28.5k tokens  (89% of 32k)
 
-  # Include an implementation plan
-  ivo context "Add caching to the API" --plan
+  # Use the context ID with karl
+  karl run "Fix the auth bug" --context a7b2c3d
 
-  # Ask a question about the codebase
-  ivo context "How does the auth flow work?" --question
+  # Bug hunting - include error-related terms
+  ivo context "timeout, error, retry, connection, socket"
 
-  # Get current context snapshot (no AI)
-  ivo context --snapshot
-
-  # Specify output format
-  ivo context "Review security" --format markdown
+  # Feature exploration
+  ivo context "cache, redis, store, persist, ttl"
 
   # Limit token budget
-  ivo context "Refactor utils" --budget 32000
+  ivo context "api, endpoint, route, handler" --budget 16000
 
-  # Include latest history entry
-  ivo context "Follow up" --history
+  # Output full context instead of summary
+  ivo context "database, query, sql" --full
 
-  # Include last 3 history entries with full records
-  ivo context "Follow up" --history --history-limit 3 --history-full
+  # Get current selection snapshot (no search)
+  ivo context --snapshot
 `
     )
     .action(async (task: string | undefined, options) => {
       try {
         const backend = await getBackend();
-
+        const budget = options.budget ?? 32000;
         const format = options.format as OutputFormat;
-        const include = options.include as ContextOptions['include'];
-        const historyOptions = buildHistoryOptions(options, include);
+
         const contextOpts: ContextOptions = {
           format,
-          budget: options.budget,
-          includePlan: options.plan,
-          responseType: options.plan ? 'plan' : options.question ? 'question' : undefined,
-          include,
-          history: historyOptions,
+          budget,
         };
 
         let result;
@@ -87,41 +76,48 @@ Examples:
             result.task = task;
           }
         } else {
-          // Use AI-powered context building
-          console.error(`Building context for: "${task}"...`);
-          console.error('(This may take 30s-5min depending on codebase size)\n');
-
+          // Build context by searching for keywords
+          console.error(`Searching: ${task}`);
           result = await backend.buildContext(task, contextOpts);
         }
 
-        if (historyOptions) {
-          try {
-            const history = await loadHistoryContext(historyOptions, process.cwd());
-            if (history) {
-              result.history = history;
-            }
-          } catch (error) {
-            const message = error instanceof Error ? error.message : String(error);
-            console.error(`History unavailable: ${message}`);
+        // If --full flag, output full context
+        if (options.full) {
+          const output = formatContext(result, format);
+          console.log(output);
+          return;
+        }
+
+        // Save context and output summary + ID
+        const content = formatContext(result, format);
+        const meta = await saveContext(content, {
+          task: result.task,
+          files: result.files.length,
+          tokens: result.totalTokens,
+          budget,
+        });
+
+        // Print bill of goods - strategy breakdown
+        const usage = budget > 0 ? `(${((result.totalTokens / budget) * 100).toFixed(0)}% of ${formatTokens(budget)})` : '';
+        console.log(`${meta.id}  ${result.files.length} files  ${formatTokens(result.totalTokens)} tokens  ${usage}`);
+        console.log('');
+
+        // Strategy breakdown
+        if (result.strategies && Object.keys(result.strategies).length > 0) {
+          // Sort strategies by token count descending
+          const sortedStrategies = Object.entries(result.strategies)
+            .sort((a, b) => b[1].tokens - a[1].tokens);
+
+          for (const [strategy, stats] of sortedStrategies) {
+            const countStr = stats.count > 0 ? `${stats.count} files` : '';
+            const tokensStr = formatTokens(stats.tokens);
+            console.log(`  ${strategy.padEnd(12)} ${countStr.padStart(10)}  ${tokensStr.padStart(6)}`);
           }
         }
 
-        // Output the formatted result
-        const output = formatContext(result, format);
-        console.log(output);
-
-        // Print summary to stderr so it doesn't interfere with piping
-        if (!options.snapshot && task) {
-          console.error('');
-          console.error(`Context built: ${result.files.length} files, ${formatTokens(result.totalTokens)} tokens`);
-          if (result.budget) {
-            const usage = ((result.totalTokens / result.budget) * 100).toFixed(1);
-            console.error(`Budget usage: ${usage}%`);
-          }
-          if (result.chatId) {
-            console.error(`Chat ID: ${result.chatId} (for follow-up with rp-cli)`);
-          }
-        }
+        // Hint for usage
+        console.log('');
+        console.log(`Use: karl run "task" --context ${meta.id}`);
       } catch (error) {
         if (error instanceof Error) {
           console.error(`Error: ${error.message}`);
@@ -137,47 +133,4 @@ function formatTokens(tokens: number): string {
     return `${(tokens / 1000).toFixed(1)}k`;
   }
   return String(tokens);
-}
-
-function collect(value: string, previous: string[] | undefined): string[] {
-  const next = previous ? [...previous] : [];
-  if (value && value.trim()) {
-    next.push(value.trim());
-  }
-  return next;
-}
-
-function buildHistoryOptions(
-  options: Record<string, unknown>,
-  include: ContextOptions['include']
-): ContextHistoryOptions | undefined {
-  const includeHistory = Boolean(
-    options.history ||
-      options.historyId ||
-      options.historyLimit ||
-      options.historyFull ||
-      options.historyTag ||
-      options.historyStatus ||
-      options.historyStack ||
-      options.historyModel ||
-      options.historySkill ||
-      include?.includes('history')
-  );
-
-  if (!includeHistory) {
-    return undefined;
-  }
-
-  const limitValue = typeof options.historyLimit === 'number' ? options.historyLimit : undefined;
-
-  return {
-    id: typeof options.historyId === 'string' ? options.historyId : undefined,
-    limit: limitValue,
-    full: Boolean(options.historyFull),
-    tag: Array.isArray(options.historyTag) ? options.historyTag : undefined,
-    status: options.historyStatus === 'success' || options.historyStatus === 'error' ? options.historyStatus : undefined,
-    stack: typeof options.historyStack === 'string' ? options.historyStack : undefined,
-    model: typeof options.historyModel === 'string' ? options.historyModel : undefined,
-    skill: typeof options.historySkill === 'string' ? options.historySkill : undefined,
-  };
 }

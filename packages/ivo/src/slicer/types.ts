@@ -4,6 +4,7 @@
 
 export type SliceStrategy =
   | 'inventory'
+  | 'skeleton'
   | 'keyword'
   | 'symbols'
   | 'ast'

@@ -30,21 +30,31 @@ const DEFAULT_BUDGET = 32000;
 const DEFAULT_WARNING = 0.75;
 
 const DEFAULT_STRATEGIES: Record<SliceIntensity, SliceStrategy[]> = {
-  lite: ['inventory', 'keyword', 'config'],
-  standard: ['inventory', 'keyword', 'symbols', 'config', 'diff'],
-  deep: ['inventory', 'keyword', 'symbols', 'config', 'diff', 'ast', 'complexity', 'docs'],
+  lite: ['inventory', 'skeleton', 'keyword', 'config'],
+  standard: ['inventory', 'skeleton', 'keyword', 'symbols', 'config', 'diff'],
+  deep: ['inventory', 'skeleton', 'keyword', 'symbols', 'config', 'diff', 'ast', 'complexity', 'docs'],
+};
+
+const DEFAULT_INTENSITY: SliceIntensity = 'deep';
+
+// Strategy budget caps (percentage of total budget)
+const STRATEGY_BUDGET_CAPS: Partial<Record<SliceStrategy, number>> = {
+  keyword: 0.20,  // Max 20% of budget for keyword matches
+  diff: 0.10,     // Max 10% for recent changes
+  docs: 0.10,     // Max 10% for docs
 };
 
 const STRATEGY_WEIGHTS: Record<SliceStrategy, number> = {
   explicit: 0.95,
-  keyword: 0.7,
+  skeleton: 0.90,  // High priority - structural overview
+  keyword: 0.65,   // Reduced - often matches docs more than code
   symbols: 0.55,
   config: 0.45,
   diff: 0.6,
   inventory: 0.2,
   ast: 0.5,
   complexity: 0.4,
-  docs: 0.35,
+  docs: 0.30,      // Reduced - should be lower priority than code
 };
 
 const REPRESENTATION_RANK: Record<SliceCandidate['representation'], number> = {
@@ -106,6 +116,20 @@ const CONFIG_FILES = [
 ];
 
 const CODE_EXTENSIONS = ['.ts', '.tsx', '.js', '.jsx', '.rs'];
+
+// Skeleton strategy: entry points and structural files
+const SKELETON_PATTERNS = [
+  // Entry points
+  'cli.ts', 'cli.js', 'main.ts', 'main.js', 'mod.ts', 'mod.rs',
+  'index.ts', 'index.js', 'lib.rs',
+  // Type definitions
+  'types.ts', 'types.js', 'interfaces.ts',
+  // Core modules (commonly named)
+  'app.ts', 'app.js', 'server.ts', 'server.js',
+];
+
+// Directories to prioritize for skeleton (src/, lib/, packages/*/src/)
+const SKELETON_DIRS = ['src/', 'lib/', 'packages/'];
 
 const CORE_DOC_FILES = [
   'AGENTS.md',
@@ -270,8 +294,8 @@ export function rankCandidates(plan: SlicePlan): SliceCandidate[] {
 }
 
 function normalizeIntensity(intensity?: SliceIntensity): SliceIntensity {
-  if (intensity === 'lite' || intensity === 'deep') return intensity;
-  return 'standard';
+  if (intensity === 'lite' || intensity === 'standard' || intensity === 'deep') return intensity;
+  return DEFAULT_INTENSITY;
 }
 
 function resolveIntensity(
@@ -399,12 +423,15 @@ function buildStrategyTotals(candidates: SliceCandidate[]): Record<string, { tok
 }
 
 function mergeCandidates(candidates: SliceCandidate[]): SliceCandidate[] {
-  const byPath = new Map<string, SliceCandidate>();
+  // Merge candidates by path+strategy to avoid duplicates within the same strategy
+  // but allow different strategies to have their own representation of the same file
+  const byKey = new Map<string, SliceCandidate>();
 
   for (const candidate of candidates) {
-    const existing = byPath.get(candidate.path);
+    const key = `${candidate.strategy}:${candidate.path}`;
+    const existing = byKey.get(key);
     if (!existing) {
-      byPath.set(candidate.path, candidate);
+      byKey.set(key, candidate);
       continue;
     }
 
@@ -423,10 +450,10 @@ function mergeCandidates(candidates: SliceCandidate[]): SliceCandidate[] {
     const sources = new Set([existing.source, candidate.source].filter(Boolean));
     chosen.source = Array.from(sources).join('; ');
 
-    byPath.set(candidate.path, chosen);
+    byKey.set(key, chosen);
   }
 
-  return Array.from(byPath.values());
+  return Array.from(byKey.values());
 }
 
 function upgradeSelectedCandidates(selected: SliceCandidate[], remaining: number): number {
@@ -593,6 +620,62 @@ export class SlicerEngine {
           reason: 'Explicit path referenced in task',
           source: 'task',
           content,
+          alternates,
+        });
+        matchedFiles.add(path);
+      }
+    }
+
+    // Skeleton strategy: find entry points and structural files, produce codemaps
+    if (strategies.includes('skeleton')) {
+      const skeletonIntensity = resolveIntensity('skeleton', request, intensity);
+      const maxSkeletonFiles = skeletonIntensity === 'lite' ? 8 : skeletonIntensity === 'deep' ? 30 : 16;
+      const allFiles = await listRepoFiles(request.repoRoot);
+
+      // Find skeleton files: match patterns in priority directories
+      const skeletonFiles: string[] = [];
+      for (const file of allFiles) {
+        if (!isPathIncluded(file, request)) continue;
+        const basename = file.split('/').pop() || '';
+        const inPriorityDir = SKELETON_DIRS.some(dir => file.includes(dir));
+
+        if (SKELETON_PATTERNS.includes(basename) && inPriorityDir) {
+          skeletonFiles.push(file);
+        }
+      }
+
+      // Extract codemaps for skeleton files
+      for (const path of skeletonFiles.slice(0, maxSkeletonFiles)) {
+        const fullPath = join(request.repoRoot, path);
+        const language = detectLanguage(path);
+        if (!language) continue;
+
+        const content = await loadFileContent(fullPath);
+        if (!content) continue;
+
+        const codemap = await extractCodemap(fullPath, content);
+        if (!codemap) continue;
+
+        const compact = formatCodemapCompact(codemap);
+        const tokens = estimateTokens(compact);
+        const fullTokens = estimateTokens(content);
+
+        // Alternate: full content if small enough
+        const alternates: SliceAlternate[] = [makeReferenceAlternate(path, 'skeleton reference')];
+        if (fullTokens <= 2000) {
+          alternates.unshift({ representation: 'full', tokens: fullTokens, content });
+        }
+
+        candidates.push({
+          id: `skeleton:${path}`,
+          path,
+          strategy: 'skeleton',
+          representation: 'codemap',
+          score: scoreCandidate('skeleton', 1, tokens, budgetTokens),
+          tokens,
+          reason: 'Entry point / structural file',
+          source: 'skeleton scan',
+          codemap: compact,
           alternates,
         });
         matchedFiles.add(path);
@@ -986,11 +1069,37 @@ export class SlicerEngine {
 
     const sorted = rankCandidates(plan);
 
+    // Track per-strategy token usage for budget caps
+    const strategyTokens: Record<string, number> = {};
+    // Track selected files by representation to allow multiple views of same file
+    // e.g., keyword snippet + symbols codemap for the same file
+    const selectedByPathRep = new Set<string>();
+    const getStrategyBudget = (strategy: SliceStrategy): number => {
+      const cap = STRATEGY_BUDGET_CAPS[strategy];
+      return cap ? Math.floor(budgetTokens * cap) : budgetTokens;
+    };
+
     for (const candidate of sorted) {
-      const picked = pickCandidate(candidate, remaining);
+      // Skip if we already selected this file with the same representation
+      const pathRepKey = `${candidate.path}:${candidate.representation}`;
+      if (selectedByPathRep.has(pathRepKey)) continue;
+
+      // Check strategy budget cap
+      const strategyBudget = getStrategyBudget(candidate.strategy);
+      const currentUsage = strategyTokens[candidate.strategy] ?? 0;
+      const strategyRemaining = strategyBudget - currentUsage;
+
+      // Use the smaller of overall remaining and strategy remaining
+      const effectiveRemaining = Math.min(remaining, strategyRemaining);
+      if (effectiveRemaining <= 0) continue;
+
+      const picked = pickCandidate(candidate, effectiveRemaining);
       if (!picked) continue;
+
       selected.push(picked);
+      selectedByPathRep.add(`${picked.path}:${picked.representation}`);
       remaining -= picked.tokens;
+      strategyTokens[candidate.strategy] = currentUsage + picked.tokens;
       if (remaining <= 0) break;
     }
 
@@ -1007,12 +1116,28 @@ export class SlicerEngine {
       relevance: Number(candidate.score.toFixed(2)),
     }));
 
+    // Build strategy stats from selected candidates
+    const strategies: Record<string, { count: number; tokens: number }> = {};
+    for (const candidate of selected) {
+      const stats = strategies[candidate.strategy] ?? { count: 0, tokens: 0 };
+      stats.count++;
+      stats.tokens += candidate.tokens;
+      strategies[candidate.strategy] = stats;
+    }
+    // Add tree to inventory if present
+    if (plan.tree && treeTokens > 0) {
+      const inv = strategies['inventory'] ?? { count: 0, tokens: 0 };
+      inv.tokens += treeTokens;
+      strategies['inventory'] = inv;
+    }
+
     const totalTokens = budgetTokens - remaining;
     const context: ContextResult = {
       task: plan.request.task,
       files,
       totalTokens,
       budget: budgetTokens,
+      strategies,
       tree: plan.tree && treeTokens > 0 ? plan.tree.content : undefined,
     };
 

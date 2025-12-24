@@ -1,9 +1,8 @@
 /**
  * Backend interface for Ivo
  *
- * This abstraction allows swapping implementations:
- * - RepoPrompt backend (shells out to rp-cli)
- * - Native backend (future: tree-sitter, direct file access)
+ * Abstracts file system and code analysis operations.
+ * Currently uses native backend with ripgrep, tree-sitter, etc.
  */
 
 import type {

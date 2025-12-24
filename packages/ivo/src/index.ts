@@ -39,16 +39,12 @@ export type {
   SliceStrategyCaps,
 } from './slicer/index.js';
 
-export {
-  IvoError,
-  BackendNotAvailableError,
-  RepoPromptNotRunningError,
-} from './types.js';
+export { IvoError, BackendNotAvailableError } from './types.js';
 
 // Backend
 export type { IvoBackend, BackendFactory } from './backends/types.js';
 export { registerBackend, getBackend, getDefaultBackend, backends } from './backends/types.js';
-export { RepoPromptBackend } from './backends/repoprompt.js';
+export { NativeBackend } from './backends/native.js';
 
 // Output formatters
 export {
@@ -66,11 +62,11 @@ export {
 export { SlicerEngine, createSlicerEngine, rankCandidates, CANDIDATE_SORT } from './slicer/index.js';
 
 // Default export: create a configured Ivo instance
-import { getDefaultBackend, type IvoBackend } from './backends/types.js';
-import './backends/repoprompt.js';
+import { NativeBackend } from './backends/native.js';
+import type { IvoBackend } from './backends/types.js';
 
-export async function createIvo(): Promise<IvoBackend | undefined> {
-  return getDefaultBackend();
+export async function createIvo(): Promise<IvoBackend> {
+  return new NativeBackend();
 }
 
 export default createIvo;

@@ -175,11 +175,17 @@ export interface ContextFile {
   relevance?: number;
 }
 
+export interface StrategyStats {
+  count: number;
+  tokens: number;
+}
+
 export interface ContextResult {
   task: string;
   files: ContextFile[];
   totalTokens: number;
   budget?: number;
+  strategies?: Record<string, StrategyStats>;
   plan?: string;
   prompt?: string;
   tree?: string;
@@ -210,15 +216,5 @@ export class BackendNotAvailableError extends IvoError {
       { backend }
     );
     this.name = 'BackendNotAvailableError';
-  }
-}
-
-export class RepoPromptNotRunningError extends BackendNotAvailableError {
-  constructor() {
-    super(
-      'repoprompt',
-      'Please launch RepoPrompt.app and ensure MCP Server is enabled in Settings > MCP.'
-    );
-    this.name = 'RepoPromptNotRunningError';
   }
 }

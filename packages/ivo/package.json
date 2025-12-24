@@ -1,7 +1,7 @@
 {
   "name": "@karl/ivo",
   "version": "0.1.0",
-  "description": "Context Intelligence Engine for Karl - intelligent context preparation using rp-cli",
+  "description": "Context Intelligence Engine for Karl",
   "type": "module",
   "main": "./src/index.ts",
   "bin": {

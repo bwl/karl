@@ -26,6 +26,7 @@ import type {
   CodeMap,
 } from '../types.js';
 import { extractCodemap, detectLanguage } from '../codemap/index.js';
+import { createSlicerEngine } from '../slicer/engine.js';
 
 interface ExecResult {
   stdout: string;
@@ -439,9 +440,17 @@ export class NativeBackend implements IvoBackend {
   // ===========================================================================
 
   async buildContext(task: string, opts?: ContextOptions): Promise<ContextResult> {
-    // For native backend, just get current selection
-    // TODO: Implement AI-powered relevance scoring
-    return this.getWorkspaceContext({ ...opts, task } as ContextOptions & { task: string });
+    // Use slicer engine for intelligent context gathering
+    const engine = createSlicerEngine(this);
+    const plan = await engine.plan({
+      task,
+      repoRoot: this.cwd,
+      budgetTokens: opts?.budget ?? 32000,
+      intensity: 'deep',
+      includeTree: true,
+    });
+    const result = await engine.assemble(plan);
+    return result.context;
   }
 
   async getWorkspaceContext(opts?: ContextOptions): Promise<ContextResult> {

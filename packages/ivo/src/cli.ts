@@ -8,11 +8,8 @@
 
 import { Command } from 'commander';
 import { registerCommands } from './commands/index.js';
-import { getDefaultBackend, type IvoBackend } from './backends/types.js';
-
-// Import and register backends
-import './backends/native.js';
-import './backends/repoprompt.js';
+import { NativeBackend } from './backends/native.js';
+import type { IvoBackend } from './backends/types.js';
 
 const VERSION = '0.1.0';
 
@@ -20,26 +17,10 @@ const VERSION = '0.1.0';
 let backendInstance: IvoBackend | undefined;
 
 async function getBackend(): Promise<IvoBackend> {
-  if (backendInstance) {
-    return backendInstance;
+  if (!backendInstance) {
+    backendInstance = new NativeBackend();
   }
-
-  const backend = await getDefaultBackend();
-  if (!backend) {
-    console.error('Error: No backend available.');
-    console.error('');
-    console.error('Ivo requires a backend to function. Currently supported:');
-    console.error('  - RepoPrompt (requires RepoPrompt.app running with MCP enabled)');
-    console.error('');
-    console.error('To use RepoPrompt:');
-    console.error('  1. Launch RepoPrompt.app');
-    console.error('  2. Enable MCP Server in Settings > MCP');
-    console.error('  3. Open a workspace/project');
-    process.exit(1);
-  }
-
-  backendInstance = backend;
-  return backend;
+  return backendInstance;
 }
 
 const program = new Command();
@@ -51,9 +32,7 @@ program
 
 Ivo prepares optimal context before Karl executes tasks.
 Like a tennis scout who analyzes the court, Ivo identifies
-the most relevant files and builds efficient context.
-
-Backends are pluggable; use native tools or RepoPrompt when available.`
+the most relevant files and builds efficient context.`
   )
   .version(VERSION, '-v, --version', 'Show version number')
   .helpOption('-h, --help', 'Show help');

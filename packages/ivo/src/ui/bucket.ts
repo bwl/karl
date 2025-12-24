@@ -12,6 +12,7 @@ import { loadHistoryContext } from '../history.js';
 
 const AVAILABLE_STRATEGIES: SliceStrategy[] = [
   'inventory',
+  'skeleton',
   'keyword',
   'symbols',
   'config',
@@ -22,13 +23,16 @@ const AVAILABLE_STRATEGIES: SliceStrategy[] = [
 ];
 
 const DEFAULT_STRATEGIES: Record<SliceIntensity, SliceStrategy[]> = {
-  lite: ['inventory', 'keyword', 'config'],
-  standard: ['inventory', 'keyword', 'symbols', 'config', 'diff'],
-  deep: ['inventory', 'keyword', 'symbols', 'config', 'diff', 'ast', 'complexity', 'docs'],
+  lite: ['inventory', 'skeleton', 'keyword', 'config'],
+  standard: ['inventory', 'skeleton', 'keyword', 'symbols', 'config', 'diff'],
+  deep: ['inventory', 'skeleton', 'keyword', 'symbols', 'config', 'diff', 'ast', 'complexity', 'docs'],
 };
+
+const DEFAULT_INTENSITY: SliceIntensity = 'deep';
 
 const STRATEGY_HELP: Record<SliceStrategy, string> = {
   inventory: 'Inventory: quick file list snapshot (paths + sizes).',
+  skeleton: 'Skeleton: codemaps of entry points and type files.',
   keyword: 'Keyword: search task terms in file content.',
   symbols: 'Symbols: scan for identifiers matching task.',
   config: 'Config: pick relevant config/build/env files.',
