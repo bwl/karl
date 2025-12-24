@@ -16,13 +16,16 @@ import { loadHistoryContext } from '../history.js';
 const DEFAULT_BUDGET = 32000;
 
 const DEFAULT_STRATEGIES: Record<SliceIntensity, SliceStrategy[]> = {
-  lite: ['inventory', 'keyword', 'config'],
-  standard: ['inventory', 'keyword', 'symbols', 'config', 'diff'],
-  deep: ['inventory', 'keyword', 'symbols', 'config', 'diff', 'ast', 'complexity', 'docs'],
+  lite: ['inventory', 'skeleton', 'keyword', 'config'],
+  standard: ['inventory', 'skeleton', 'keyword', 'symbols', 'config', 'diff'],
+  deep: ['inventory', 'skeleton', 'keyword', 'symbols', 'config', 'diff', 'ast', 'complexity', 'docs'],
 };
+
+const DEFAULT_INTENSITY: SliceIntensity = 'deep';
 
 const AVAILABLE_STRATEGIES: SliceStrategy[] = [
   'inventory',
+  'skeleton',
   'keyword',
   'symbols',
   'config',
@@ -34,11 +37,11 @@ const AVAILABLE_STRATEGIES: SliceStrategy[] = [
 
 export function registerBucketCommand(program: Command, getBackend: () => Promise<IvoBackend>): void {
   program
-    .command('bucket [task]')
+    .command('bucket [keywords]')
     .alias('fill')
-    .description('Interactively fill a context bucket with selectable strategies')
+    .description('Fill a context bucket with fine-grained strategy control')
     .option('-b, --budget <n>', 'Token budget limit', parseInt)
-    .option('-i, --intensity <level>', 'Intensity: lite, standard, deep', 'standard')
+    .option('-i, --intensity <level>', 'Intensity: lite, standard, deep', 'deep')
     .option('-s, --strategies <list>', 'Comma-separated strategies to include')
     .option('--format <format>', 'Output format: xml, markdown, or json', 'xml')
     .option('--strategy-max-items <spec>', 'Per-strategy max items (e.g. keyword=20,docs=5)')
@@ -50,21 +53,35 @@ export function registerBucketCommand(program: Command, getBackend: () => Promis
     .addHelpText(
       'after',
       `
+Keywords:
+  Like 'ivo context', provide keywords to search for. Include synonyms
+  for better coverage. Up to 12 keywords are used.
+
+  Example: "auth, login, session, jwt, token"
+
+Strategies:
+  inventory   - Directory tree overview
+  skeleton    - Entry points and structural files (codemaps)
+  keyword     - Files matching your keywords (snippets)
+  symbols     - Codemaps for matched files
+  config      - Config files (package.json, tsconfig, etc.)
+  diff        - Recently changed files
+  ast         - AST-based codemaps for keyword matches
+  complexity  - Codemaps of largest/most complex files
+  docs        - Documentation files
+
 Examples:
-  # Interactive bucket fill (prompts for options)
-  ivo bucket "Fix auth timeout"
+  # Quick context with defaults
+  ivo bucket "auth, login, jwt" --no-interactive
 
-  # Non-interactive with explicit strategies
-  ivo bucket "Refactor utils" --budget 32000 --strategies keyword,symbols
+  # Fine-tune strategies
+  ivo bucket "cache, redis" --strategies skeleton,keyword,symbols
 
-  # Include tree output
-  ivo bucket "Review security" --tree
+  # Inspect the plan as JSON
+  ivo bucket "api, endpoint" --json --no-interactive
 
-  # Emit plan + selection JSON
-  ivo bucket "Audit auth" --json
-
-  # Use the interactive UI loop
-  ivo bucket "Optimize context" --ui
+  # Interactive TUI for manual selection
+  ivo bucket "database, query" --ui
 `
     )
     .action(async (task: string | undefined, options) => {
@@ -237,7 +254,7 @@ Examples:
 
 function normalizeIntensity(intensity: SliceIntensity): SliceIntensity {
   if (intensity === 'lite' || intensity === 'deep') return intensity;
-  return 'standard';
+  return DEFAULT_INTENSITY;
 }
 
 function parseStrategies(input: string | undefined, intensity: SliceIntensity): SliceStrategy[] {
