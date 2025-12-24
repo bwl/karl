@@ -110,7 +110,7 @@ karl run --skill security-review "analyze codebase"
 Always use `bun` for package management and running scripts:
 
 ```bash
-bun install              # Install dependencies
-bun run build            # Build the CLI
-bun tsc --noEmit         # Type check
+bun install                                        # Install dependencies
+bun run build                                      # Build the CLI
+bunx tsc -p packages/karl/tsconfig.json --noEmit   # Type check
 ```

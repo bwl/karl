@@ -6,6 +6,8 @@
   "scripts": {
     "dev": "bun run packages/karl/src/cli.ts",
     "build": "bun build packages/karl/src/cli.ts --compile --outfile packages/karl/dist/karl",
+    "build:ivo": "cd packages/ivo && bun run build && bun link",
+    "build:all": "bun run build:ivo && bun run build",
     "typecheck": "tsc -p packages/karl/tsconfig.json --noEmit"
   }
 }

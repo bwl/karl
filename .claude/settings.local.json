@@ -3,7 +3,10 @@
     "allow": [
       "Bash(cargo check:*)",
       "Bash(cargo build:*)",
-      "Bash(rp-cli:*)"
+      "Bash(rp-cli:*)",
+      "WebFetch(domain:docs.anthropic.com)",
+      "Bash(bun run build:ivo:*)",
+      "Bash(ivo context:*)"
     ]
   }
 }

@@ -8,3 +8,4 @@ dist/
 # Bun build artifacts
 *.bun-build
 .karl/
+.ivo/
