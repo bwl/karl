@@ -4,6 +4,7 @@ import { pathToFileURL } from 'url';
 import { HookRunner } from './hooks.js';
 import type { SchedulerEvent, ToolDiff } from './types.js';
 import { ensureDir, formatError, pathExists, resolveHomePath } from './utils.js';
+import { sandboxCommand, type SandboxPolicy } from './sandbox.js';
 
 // Tool parameter interfaces
 interface BashParams {
@@ -74,6 +75,7 @@ interface ToolContext {
   task?: string;
   taskIndex?: number;
   unrestricted?: boolean;
+  sandbox?: boolean | Partial<SandboxPolicy>;  // true = default sandbox, false = no sandbox, object = custom policy
   onDiff?: (diff: ToolDiff) => void;
   diffConfig?: { maxBytes?: number; maxLines?: number };
 }
@@ -249,9 +251,34 @@ function wrapExecute<T, D>(
   };
 }
 
-async function runShell(command: string, cwd: string, env?: Record<string, string>) {
+interface RunShellOptions {
+  cwd: string;
+  env?: Record<string, string>;
+  sandbox?: boolean | Partial<SandboxPolicy>;
+}
+
+async function runShell(command: string, options: RunShellOptions) {
+  const { cwd, env, sandbox } = options;
   const shell = process.env.SHELL ?? '/bin/sh';
-  const proc = Bun.spawn([shell, '-lc', command], {
+  let shellCommand = [shell, '-lc', command];
+
+  // Apply sandbox if enabled (default: true unless explicitly disabled)
+  const shouldSandbox = sandbox !== false;
+  let sandboxWarning: string | undefined;
+
+  if (shouldSandbox) {
+    const policy = typeof sandbox === 'object' ? sandbox : undefined;
+    const result = sandboxCommand(shellCommand, cwd, policy);
+    shellCommand = result.command;
+    sandboxWarning = result.warning;
+
+    if (!result.sandboxed && sandboxWarning) {
+      // Log warning but continue unsandboxed
+      console.error(`[sandbox] ${sandboxWarning}`);
+    }
+  }
+
+  const proc = Bun.spawn(shellCommand, {
     cwd,
     env: { ...process.env, ...env },
     stdout: 'pipe',
@@ -262,7 +289,7 @@ async function runShell(command: string, cwd: string, env?: Record<string, strin
   const stderr = await new Response(proc.stderr).text();
   const exitCode = await proc.exited;
 
-  return { stdout, stderr, exitCode };
+  return { stdout, stderr, exitCode, sandboxWarning };
 }
 
 function isBinaryContent(buffer: Uint8Array): boolean {
@@ -407,16 +434,23 @@ const editSchema: JSONSchema = {
 };
 
 export async function createBuiltinTools(ctx: ToolContext): Promise<AgentTool[]> {
+  // Determine sandbox policy: disabled if unrestricted, otherwise use ctx.sandbox or default (true)
+  const sandboxPolicy = ctx.unrestricted ? false : (ctx.sandbox ?? true);
+
   const bash: AgentTool<BashParams> = {
     name: 'bash',
     label: 'bash',
-    description: 'Execute shell commands. Returns stdout, stderr, and exit code.',
+    description: 'Execute shell commands in a sandboxed environment. Returns stdout, stderr, and exit code.',
     parameters: bashSchema,
     execute: wrapExecute<BashParams, any>(
       'bash',
       async (params) => {
         const runCwd = params.cwd ? path.resolve(ctx.cwd, params.cwd) : ctx.cwd;
-        const result = await runShell(params.command, runCwd, params.env);
+        const result = await runShell(params.command, {
+          cwd: runCwd,
+          env: params.env,
+          sandbox: sandboxPolicy,
+        });
         const output = [result.stdout, result.stderr].filter(Boolean).join('\n').trim();
         return textResult(output || `Exit code: ${result.exitCode}`, result);
       },

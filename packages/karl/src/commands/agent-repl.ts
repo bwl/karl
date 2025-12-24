@@ -1,11 +1,41 @@
 import * as readline from 'readline';
 import path from 'path';
 import { promises as fs } from 'fs';
+import { execSync } from 'child_process';
 import { Orchestrator, type OrchestratorEvent } from '../orchestrator.js';
 import type { KarlConfig } from '../types.js';
 import pc from 'picocolors';
 import { getSpinnerFrame, highlight, detectVisuals } from '../utils/visuals.js';
 import { formatDuration, resolveHomePath } from '../utils.js';
+
+// Format token count with K/M suffixes
+function formatTokens(tokens: number): string {
+  if (tokens >= 1_000_000) return `${(tokens / 1_000_000).toFixed(1)}M`;
+  if (tokens >= 1_000) return `${(tokens / 1_000).toFixed(1)}K`;
+  return String(tokens);
+}
+
+// Get git branch and dirty status
+function getGitBranch(): string | null {
+  try {
+    const branch = execSync('git rev-parse --abbrev-ref HEAD 2>/dev/null', {
+      encoding: 'utf-8',
+      timeout: 500,
+    }).trim();
+    const status = execSync('git status --porcelain 2>/dev/null', {
+      encoding: 'utf-8',
+      timeout: 500,
+    }).trim();
+    return branch + (status.length > 0 ? '*' : '');
+  } catch {
+    return null;
+  }
+}
+
+// Get project name from cwd
+function getProjectName(): string {
+  return path.basename(process.cwd());
+}
 
 interface AgentOptions {
   plain?: boolean;
@@ -44,6 +74,7 @@ export async function handleAgentRepl(config: KarlConfig, options: AgentOptions 
   let currentBuffer = '';
   let callStartTime = 0;
   let currentCallInfo = '';
+  let totalTokens = 0;
 
   // Save session header
   await fs.writeFile(sessionFile, `# Karl Agent Session ${sessionId}\n\n`);
@@ -70,14 +101,65 @@ export async function handleAgentRepl(config: KarlConfig, options: AgentOptions 
         process.stdout.write(pc.dim(event.text));
         break;
 
-      case 'karl_start':
-        process.stdout.write('\n');
+      case 'ivo_start': {
+        // Status bar separator for ivo
+        const termWidth = process.stdout.columns || 80;
+        const project = getProjectName();
+        const branch = getGitBranch();
+        const tokensStr = formatTokens(totalTokens);
+
+        const parts: string[] = ['ivo'];
+        if (branch) parts.push(branch);
+        parts.push(project);
+        parts.push(`${tokensStr} tokens`);
+
+        const info = parts.join(' ');
+        const padding = Math.max(0, termWidth - info.length - 8);
+        const leftPad = Math.floor(padding / 2);
+        const rightPad = padding - leftPad;
+        const statusLine = pc.dim('─'.repeat(leftPad) + ' ') + pc.magenta(info) + pc.dim(' ' + '─'.repeat(rightPad));
+
+        console.log('\n' + statusLine);
+        console.log(`${pc.magenta('▸')} ${pc.magenta('ivo')} ${pc.dim(`"${event.task}"`)}`);
+        break;
+      }
+
+      case 'ivo_end': {
+        if (event.contextId) {
+          const budgetUsage = event.budget > 0 ? ` (${((event.tokens / event.budget) * 100).toFixed(0)}%)` : '';
+          console.log(`${pc.green('✓')} Context: ${pc.cyan(event.contextId)} ${pc.dim(`${event.files} files, ${formatTokens(event.tokens)} tokens${budgetUsage}`)}`);
+        } else {
+          console.log(`${pc.red('✗')} Context preparation failed`);
+        }
+        break;
+      }
+
+      case 'karl_start': {
         currentBuffer = '';
         currentCallInfo = `${event.command} "${event.task}"`;
         callStartTime = Date.now();
         callNum++;
 
-        // Simple header: ▸ karl run "task"
+        // Status bar separator: ─── karl master* 12.5K tokens ───
+        const termWidth = process.stdout.columns || 80;
+        const project = getProjectName();
+        const branch = getGitBranch();
+        const tokensStr = formatTokens(totalTokens);
+
+        const parts: string[] = ['karl'];
+        if (branch) parts.push(branch);
+        parts.push(project);
+        parts.push(`${tokensStr} tokens`);
+
+        const info = parts.join(' ');
+        const padding = Math.max(0, termWidth - info.length - 8);
+        const leftPad = Math.floor(padding / 2);
+        const rightPad = padding - leftPad;
+        const statusLine = pc.dim('─'.repeat(leftPad) + ' ') + pc.cyan(info) + pc.dim(' ' + '─'.repeat(rightPad));
+
+        console.log('\n' + statusLine);
+
+        // Header: ▸ karl run "task"
         const header = `${pc.cyan('▸')} ${pc.cyan('karl')} ${event.command} ${pc.dim(`"${event.task}"`)}`;
         console.log(header);
 
@@ -90,12 +172,13 @@ export async function handleAgentRepl(config: KarlConfig, options: AgentOptions 
           }, 120);
         }
         break;
+      }
 
       case 'karl_output':
         currentBuffer += event.chunk;
         break;
 
-      case 'karl_end':
+      case 'karl_end': {
         if (spinnerInterval) {
           clearInterval(spinnerInterval);
           spinnerInterval = null;
@@ -115,22 +198,23 @@ export async function handleAgentRepl(config: KarlConfig, options: AgentOptions 
         // Status line
         console.log(`${statusIcon} ${pc.dim(currentCallInfo)} ${durStr}`);
 
-        // Separator
-        const termWidth = process.stdout.columns || 80;
-        console.log(pc.dim('─'.repeat(Math.min(60, termWidth - 4))));
-
         callHistory.push({ num: callNum, info: currentCallInfo, raw: currentBuffer, durationMs: durMs });
 
         // Append to session MD with embedded raw
         const mdKarl = `\n### Karl Call ${callNum}: ${currentCallInfo}\n\`\`\`\n${currentBuffer.trim()}\n\`\`\`\n\n`;
         fs.appendFile(sessionFile, mdKarl).catch(console.error);
         break;
+      }
 
       case 'response':
         console.log(`\n${event.text}`);
         // Append response to MD
         const mdResp = `\n## Agent\n\n${event.text}\n\n---\n\n`;
         fs.appendFile(sessionFile, mdResp).catch(console.error);
+        break;
+
+      case 'usage':
+        totalTokens += event.tokens.total ?? 0;
         break;
 
       case 'error':

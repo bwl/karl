@@ -61,6 +61,7 @@ export async function handleTldrCommand(_args: string[]): Promise<void> {
   lines.push('  karl models list       See configured models');
   lines.push('  karl stacks list       See all stacks');
   lines.push('  karl skills list       See available skills');
+  lines.push('  karl config            Config TUI and JSON views');
   lines.push('  karl info              Full system status');
   lines.push('  karl --help            All options');
 

@@ -7,6 +7,7 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync, readdirSync, unlinkSync } from 'fs';
 import { join, basename } from 'path';
 import { homedir } from 'os';
+import { spawnSync } from 'child_process';
 import { createInterface } from 'readline';
 import {
   loadOAuthCredentials,
@@ -18,6 +19,7 @@ import { loadConfig } from '../config.js';
 
 const PROVIDERS_DIR = join(homedir(), '.config', 'karl', 'providers');
 const MODELS_DIR = join(homedir(), '.config', 'karl', 'models');
+const GLOBAL_CONFIG_PATH = join(homedir(), '.config', 'karl', 'karl.json');
 
 /**
  * Known provider templates
@@ -127,6 +129,28 @@ function deleteProvider(name: string): void {
   const filePath = join(PROVIDERS_DIR, `${name}.json`);
   if (existsSync(filePath)) {
     unlinkSync(filePath);
+  }
+}
+
+function readProjectConfig(): Record<string, unknown> {
+  const projectPath = join(process.cwd(), '.karl.json');
+  if (!existsSync(projectPath)) {
+    return {};
+  }
+  try {
+    return JSON.parse(readFileSync(projectPath, 'utf-8'));
+  } catch {
+    return {};
+  }
+}
+
+function openInEditor(filePath: string): void {
+  const editor = process.env.EDITOR || process.env.VISUAL;
+  if (editor) {
+    spawnSync(editor, [filePath], { stdio: 'inherit' });
+  } else {
+    console.log(`File: ${filePath}`);
+    console.log('Set $EDITOR to open automatically.');
   }
 }
 
@@ -403,6 +427,41 @@ export async function removeProvider(providerKey: string) {
 }
 
 /**
+ * Edit a provider (opens the provider file or config containing it)
+ */
+export async function editProvider(providerKey: string) {
+  const filePath = join(PROVIDERS_DIR, `${providerKey}.json`);
+  if (existsSync(filePath)) {
+    openInEditor(filePath);
+    return;
+  }
+
+  const projectPath = join(process.cwd(), '.karl.json');
+  const projectConfig = readProjectConfig();
+  const projectProviders = projectConfig.providers as Record<string, unknown> | undefined;
+  if (projectProviders && Object.prototype.hasOwnProperty.call(projectProviders, providerKey)) {
+    openInEditor(projectPath);
+    return;
+  }
+
+  if (existsSync(GLOBAL_CONFIG_PATH)) {
+    try {
+      const globalConfig = JSON.parse(readFileSync(GLOBAL_CONFIG_PATH, 'utf-8')) as Record<string, unknown>;
+      const globalProviders = globalConfig.providers as Record<string, unknown> | undefined;
+      if (globalProviders && Object.prototype.hasOwnProperty.call(globalProviders, providerKey)) {
+        openInEditor(GLOBAL_CONFIG_PATH);
+        return;
+      }
+    } catch {
+      // Ignore invalid global config
+    }
+  }
+
+  console.error(`Provider "${providerKey}" not found.`);
+  process.exit(1);
+}
+
+/**
  * Login to an OAuth provider
  */
 export async function loginProvider(providerKey?: string) {
@@ -520,6 +579,14 @@ export async function handleProvidersCommand(args: string[]) {
       await removeProvider(rest[0]);
       break;
 
+    case 'edit':
+      if (rest.length === 0) {
+        console.error('Usage: karl providers edit <name>');
+        process.exit(1);
+      }
+      await editProvider(rest[0]);
+      break;
+
     case 'login':
       await loginProvider(rest[0]);
       break;
@@ -541,11 +608,12 @@ export async function handleProvidersCommand(args: string[]) {
         console.error('  show <name>       Show provider details');
         console.error('  add [name]        Add a new provider');
         console.error('  remove <name>     Remove a provider');
+        console.error('  edit <name>       Edit a provider file');
         console.error('  login [name]      Login to OAuth provider');
         console.error('  logout <name>     Logout from OAuth provider');
       } else {
         console.error(`Unknown providers command: ${command}`);
-        console.error('Available commands: list, show, add, remove, login, logout');
+        console.error('Available commands: list, show, add, remove, edit, login, logout');
       }
       process.exit(1);
   }

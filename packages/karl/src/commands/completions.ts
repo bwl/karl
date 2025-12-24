@@ -13,6 +13,7 @@ const COMMANDS = [
   'continue', 'cont', 'followup', 'follow-up', 'chain',
   'init', 'setup',
   'providers', 'models', 'stacks', 'skills',
+  'config',
   'info', 'status', 'history', 'logs', 'jobs',
   'previous', 'prev', 'last',
   'tldr', 'help',
@@ -23,10 +24,11 @@ const COMMANDS = [
 
 // Subcommands
 const SUBCOMMANDS: Record<string, string[]> = {
-  providers: ['list', 'add', 'remove', 'login', 'logout'],
-  models: ['list', 'add', 'remove', 'default'],
-  stacks: ['list', 'show', 'create', 'edit', 'remove'],
+  providers: ['list', 'add', 'remove', 'edit', 'login', 'logout'],
+  models: ['list', 'add', 'remove', 'edit', 'default'],
+  stacks: ['list', 'show', 'create', 'edit', 'set', 'remove'],
   skills: ['list', 'show', 'create', 'validate'],
+  config: ['tui', 'show', 'edit', 'set'],
   jobs: ['clean'],
   history: ['list', 'show', 'clear'],
   completions: ['bash', 'zsh', 'fish'],
@@ -81,6 +83,7 @@ _karl_completions() {
     local jobs_cmds="${SUBCOMMANDS.jobs.join(' ')}"
     local completions_cmds="${SUBCOMMANDS.completions.join(' ')}"
     local debugdesign_cmds="${SUBCOMMANDS.debugdesign.join(' ')}"
+    local config_cmds="${SUBCOMMANDS.config.join(' ')}"
 
     # Get dynamic completions
     local stacks models skills
@@ -98,15 +101,19 @@ _karl_completions() {
         models)
             if [[ \${cword} -eq 2 ]]; then
                 COMPREPLY=($(compgen -W "$models_cmds" -- "$cur"))
-            elif [[ "\${words[2]}" == "default" || "\${words[2]}" == "remove" ]]; then
+            elif [[ "\${words[2]}" == "default" || "\${words[2]}" == "remove" || "\${words[2]}" == "edit" ]]; then
                 COMPREPLY=($(compgen -W "$models" -- "$cur"))
             fi
+            return
+            ;;
+        config)
+            COMPREPLY=($(compgen -W "$config_cmds" -- "$cur"))
             return
             ;;
         stacks)
             if [[ \${cword} -eq 2 ]]; then
                 COMPREPLY=($(compgen -W "$stacks_cmds" -- "$cur"))
-            elif [[ "\${words[2]}" =~ ^(show|edit|remove)$ ]]; then
+            elif [[ "\${words[2]}" =~ ^(show|edit|set|remove)$ ]]; then
                 COMPREPLY=($(compgen -W "$stacks" -- "$cur"))
             fi
             return
@@ -243,6 +250,7 @@ _karl() {
                         'list:List configured providers'
                         'add:Add a new provider'
                         'remove:Remove a provider'
+                        'edit:Edit a provider file'
                         'login:Login to OAuth provider'
                         'logout:Logout from OAuth provider'
                     )
@@ -253,15 +261,25 @@ _karl() {
                         'list:List configured models'
                         'add:Add a new model'
                         'remove:Remove a model'
+                        'edit:Edit a model file'
                         'default:Set the default model'
                     )
                     if (( CURRENT == 2 )); then
                         _describe 'subcommand' subcmds
-                    elif [[ $words[2] =~ ^(default|remove)$ ]]; then
+                    elif [[ $words[2] =~ ^(default|remove|edit)$ ]]; then
                         local models
                         models=(\${(f)"$(karl models list --names 2>/dev/null)"})
                         _describe 'model' models
                     fi
+                    ;;
+                config)
+                    local -a subcmds=(
+                        'tui:Launch config TUI'
+                        'show:Show config JSON'
+                        'edit:Edit config file'
+                        'set:Update config fields'
+                    )
+                    _describe 'subcommand' subcmds
                     ;;
                 stacks)
                     local -a subcmds=(
@@ -269,11 +287,12 @@ _karl() {
                         'show:Show stack details'
                         'create:Create a new stack'
                         'edit:Edit a stack'
+                        'set:Update stack fields'
                         'remove:Remove a stack'
                     )
                     if (( CURRENT == 2 )); then
                         _describe 'subcommand' subcmds
-                    elif [[ $words[2] =~ ^(show|edit|remove)$ ]]; then
+                    elif [[ $words[2] =~ ^(show|edit|set|remove)$ ]]; then
                         local stacks
                         stacks=(\${(f)"$(karl stacks list --names 2>/dev/null)"})
                         _describe 'stack' stacks
@@ -370,6 +389,7 @@ complete -c karl -n "__fish_use_subcommand" -l version -d "Show version"
 complete -c karl -n "__fish_seen_subcommand_from providers" -a "list" -d "List configured providers"
 complete -c karl -n "__fish_seen_subcommand_from providers" -a "add" -d "Add a new provider"
 complete -c karl -n "__fish_seen_subcommand_from providers" -a "remove" -d "Remove a provider"
+complete -c karl -n "__fish_seen_subcommand_from providers" -a "edit" -d "Edit a provider file"
 complete -c karl -n "__fish_seen_subcommand_from providers" -a "login" -d "Login to OAuth provider"
 complete -c karl -n "__fish_seen_subcommand_from providers" -a "logout" -d "Logout from OAuth provider"
 
@@ -377,6 +397,7 @@ complete -c karl -n "__fish_seen_subcommand_from providers" -a "logout" -d "Logo
 complete -c karl -n "__fish_seen_subcommand_from models" -a "list" -d "List configured models"
 complete -c karl -n "__fish_seen_subcommand_from models" -a "add" -d "Add a new model"
 complete -c karl -n "__fish_seen_subcommand_from models" -a "remove" -d "Remove a model"
+complete -c karl -n "__fish_seen_subcommand_from models" -a "edit" -d "Edit a model file"
 complete -c karl -n "__fish_seen_subcommand_from models" -a "default" -d "Set the default model"
 
 # stacks subcommands
@@ -384,6 +405,7 @@ complete -c karl -n "__fish_seen_subcommand_from stacks" -a "list" -d "List avai
 complete -c karl -n "__fish_seen_subcommand_from stacks" -a "show" -d "Show stack details"
 complete -c karl -n "__fish_seen_subcommand_from stacks" -a "create" -d "Create a new stack"
 complete -c karl -n "__fish_seen_subcommand_from stacks" -a "edit" -d "Edit a stack"
+complete -c karl -n "__fish_seen_subcommand_from stacks" -a "set" -d "Update stack fields"
 complete -c karl -n "__fish_seen_subcommand_from stacks" -a "remove" -d "Remove a stack"
 
 # skills subcommands
@@ -399,6 +421,12 @@ complete -c karl -n "__fish_seen_subcommand_from jobs" -a "clean" -d "Cleanup ol
 complete -c karl -n "__fish_seen_subcommand_from completions" -a "bash" -d "Bash completion script"
 complete -c karl -n "__fish_seen_subcommand_from completions" -a "zsh" -d "Zsh completion script"
 complete -c karl -n "__fish_seen_subcommand_from completions" -a "fish" -d "Fish completion script"
+
+# config subcommands
+complete -c karl -n "__fish_seen_subcommand_from config" -a "tui" -d "Launch config TUI"
+complete -c karl -n "__fish_seen_subcommand_from config" -a "show" -d "Show config JSON"
+complete -c karl -n "__fish_seen_subcommand_from config" -a "edit" -d "Edit config file"
+complete -c karl -n "__fish_seen_subcommand_from config" -a "set" -d "Update config fields"
 
 # debugdesign subcommands
 complete -c karl -n "__fish_seen_subcommand_from debugdesign dd" -a "realistic" -d "Coding session simulation"
@@ -457,6 +485,7 @@ function getCommandDescription(cmd: string): string {
     models: 'Manage models',
     stacks: 'Manage config stacks',
     skills: 'Manage agent skills',
+    config: 'Config TUI and JSON views',
     info: 'Show system info',
     status: 'Show status',
     history: 'Show run history',

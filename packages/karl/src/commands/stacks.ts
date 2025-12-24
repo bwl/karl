@@ -4,9 +4,10 @@
 
 import { StackManager } from '../stacks.js';
 import { loadConfig } from '../config.js';
-import { writeFileSync, mkdirSync, existsSync } from 'fs';
+import { writeFileSync, mkdirSync, existsSync, readFileSync } from 'fs';
 import { join } from 'path';
 import { homedir } from 'os';
+import { StackConfig } from '../types.js';
 
 /**
  * Parse duration string (e.g., "10s", "5m", "1h") to milliseconds
@@ -42,6 +43,91 @@ function formatDuration(ms: number): string {
     return `${ms / 1000}s`;
   }
   return `${ms}ms`;
+}
+
+function readJsonFile(filePath: string): Record<string, unknown> {
+  const content = readFileSync(filePath, 'utf-8');
+  try {
+    return JSON.parse(content) as Record<string, unknown>;
+  } catch (error) {
+    throw new Error(`Invalid JSON at ${filePath}: ${(error as Error).message}`);
+  }
+}
+
+function writeJsonFile(filePath: string, data: Record<string, unknown>): void {
+  writeFileSync(filePath, JSON.stringify(data, null, 2) + '\n');
+}
+
+function getProjectConfigPath(): string {
+  return join(process.cwd(), '.karl.json');
+}
+
+function normalizeClearField(field: string): keyof StackConfig | null {
+  const map: Record<string, keyof StackConfig> = {
+    model: 'model',
+    skill: 'skill',
+    extends: 'extends',
+    timeout: 'timeout',
+    temperature: 'temperature',
+    'max-tokens': 'maxTokens',
+    maxTokens: 'maxTokens',
+    context: 'context',
+    'context-file': 'contextFile',
+    contextFile: 'contextFile',
+    tools: 'tools',
+    unrestricted: 'unrestricted',
+  };
+  return map[field] ?? null;
+}
+
+type StackLocation =
+  | { kind: 'project-file'; path: string }
+  | { kind: 'global-file'; path: string }
+  | { kind: 'inline-project'; path: string }
+  | { kind: 'inline-global'; path: string };
+
+function resolveStackLocation(name: string): StackLocation | null {
+  const projectPath = join(process.cwd(), '.karl', 'stacks', `${name}.json`);
+  if (existsSync(projectPath)) {
+    return { kind: 'project-file', path: projectPath };
+  }
+
+  const globalPath = join(homedir(), '.config', 'karl', 'stacks', `${name}.json`);
+  if (existsSync(globalPath)) {
+    return { kind: 'global-file', path: globalPath };
+  }
+
+  const projectConfigPath = getProjectConfigPath();
+  if (existsSync(projectConfigPath)) {
+    const projectConfig = readJsonFile(projectConfigPath);
+    const stacks = projectConfig.stacks as Record<string, unknown> | undefined;
+    if (stacks && Object.prototype.hasOwnProperty.call(stacks, name)) {
+      return { kind: 'inline-project', path: projectConfigPath };
+    }
+  }
+
+  const globalConfigPath = join(homedir(), '.config', 'karl', 'karl.json');
+  if (existsSync(globalConfigPath)) {
+    const globalConfig = readJsonFile(globalConfigPath);
+    const stacks = globalConfig.stacks as Record<string, unknown> | undefined;
+    if (stacks && Object.prototype.hasOwnProperty.call(stacks, name)) {
+      return { kind: 'inline-global', path: globalConfigPath };
+    }
+  }
+
+  return null;
+}
+
+function applyStackUpdate(
+  stack: Record<string, unknown>,
+  changes: Partial<StackConfig>,
+  clearFields: Set<keyof StackConfig>
+): Record<string, unknown> {
+  const next = { ...stack, ...changes };
+  for (const field of clearFields) {
+    delete next[field];
+  }
+  return next;
 }
 
 export interface StacksListOptions {
@@ -246,7 +332,7 @@ export async function removeStack(name: string) {
 }
 
 /**
- * Edit a stack (opens in default editor or shows path)
+ * Edit a stack in $EDITOR (or print the path)
  */
 export async function editStack(name: string) {
   const globalPath = join(homedir(), '.config', 'karl', 'stacks', `${name}.json`);
@@ -274,6 +360,55 @@ export async function editStack(name: string) {
     console.log(`Stack location: ${stackPath}`);
     console.log('');
     console.log('Set $EDITOR to open automatically, or edit the file directly.');
+  }
+}
+
+export interface UpdateStackOptions {
+  changes: Partial<StackConfig>;
+  clearFields?: Set<keyof StackConfig>;
+}
+
+/**
+ * Update a stack in place (file or inline config).
+ */
+export async function updateStack(name: string, options: UpdateStackOptions) {
+  try {
+    const location = resolveStackLocation(name);
+    if (!location) {
+      console.error(`Stack "${name}" not found.`);
+      process.exit(1);
+    }
+
+    const clearFields = options.clearFields ?? new Set<keyof StackConfig>();
+    const changes = options.changes;
+
+    if (location.kind === 'project-file' || location.kind === 'global-file') {
+      const stack = readJsonFile(location.path);
+      if (!stack || typeof stack !== 'object' || Array.isArray(stack)) {
+        console.error(`Invalid stack file: ${location.path}`);
+        process.exit(1);
+      }
+      const updated = applyStackUpdate(stack, changes, clearFields);
+      writeJsonFile(location.path, updated);
+      console.log(`✓ Stack "${name}" updated at ${location.path}`);
+      return;
+    }
+
+    const config = readJsonFile(location.path);
+    if (!config || typeof config !== 'object' || Array.isArray(config)) {
+      console.error(`Invalid config file: ${location.path}`);
+      process.exit(1);
+    }
+    const stacks = (config.stacks ?? {}) as Record<string, unknown>;
+    const stack = (stacks[name] ?? {}) as Record<string, unknown>;
+    const updated = applyStackUpdate(stack, changes, clearFields);
+    stacks[name] = updated;
+    config.stacks = stacks;
+    writeJsonFile(location.path, config);
+    console.log(`✓ Stack "${name}" updated in ${location.path}`);
+  } catch (error) {
+    console.error((error as Error).message);
+    process.exit(1);
   }
 }
 
@@ -331,6 +466,63 @@ export async function handleStacksCommand(args: string[]) {
       break;
     }
 
+    case 'set':
+    case 'update': {
+      if (rest.length === 0) {
+        console.error('Usage: karl stacks set <stack-name> [options]');
+        process.exit(1);
+      }
+
+      const name = rest[0];
+      const changes: Partial<StackConfig> = {};
+      const clearFields = new Set<keyof StackConfig>();
+      const tools: string[] = [];
+
+      for (let i = 1; i < rest.length; i++) {
+        const arg = rest[i];
+        if ((arg === '--model' || arg === '-m') && rest[i + 1]) {
+          changes.model = rest[++i];
+        } else if ((arg === '--skill' || arg === '-s') && rest[i + 1]) {
+          changes.skill = rest[++i];
+        } else if (arg === '--extends' && rest[i + 1]) {
+          changes.extends = rest[++i];
+        } else if ((arg === '--timeout' || arg === '-t') && rest[i + 1]) {
+          changes.timeout = parseDuration(rest[++i]);
+        } else if (arg === '--temperature' && rest[i + 1]) {
+          changes.temperature = parseFloat(rest[++i]);
+        } else if (arg === '--max-tokens' && rest[i + 1]) {
+          changes.maxTokens = parseInt(rest[++i], 10);
+        } else if ((arg === '--context' || arg === '-c') && rest[i + 1]) {
+          changes.context = rest[++i];
+        } else if (arg === '--context-file' && rest[i + 1]) {
+          changes.contextFile = rest[++i];
+        } else if (arg === '--tools' && rest[i + 1]) {
+          const value = rest[++i];
+          if (value === 'none') {
+            changes.tools = [];
+          } else {
+            const parts = value.split(',').map(p => p.trim()).filter(Boolean);
+            tools.push(...parts);
+            changes.tools = Array.from(new Set(tools));
+          }
+        } else if (arg === '--unrestricted') {
+          changes.unrestricted = true;
+        } else if (arg === '--restricted') {
+          changes.unrestricted = false;
+        } else if (arg === '--clear' && rest[i + 1]) {
+          const field = normalizeClearField(rest[++i]);
+          if (!field) {
+            console.error(`Unknown field to clear: ${rest[i]}`);
+            process.exit(1);
+          }
+          clearFields.add(field);
+        }
+      }
+
+      await updateStack(name, { changes, clearFields });
+      break;
+    }
+
     case 'remove':
     case 'rm':
     case 'delete':
@@ -363,11 +555,12 @@ export async function handleStacksCommand(args: string[]) {
         console.error('  list              List available stacks');
         console.error('  show <name>       Show stack details');
         console.error('  create <name>     Create a new stack');
-        console.error('  edit <name>       Edit a stack');
+        console.error('  edit <name>       Edit a stack in $EDITOR');
+        console.error('  set <name>        Update stack fields');
         console.error('  remove <name>     Remove a stack');
       } else {
         console.error(`Unknown stacks command: ${command}`);
-        console.error('Available commands: list, show, create, edit, remove');
+        console.error('Available commands: list, show, create, edit, set, remove');
       }
       process.exit(1);
   }

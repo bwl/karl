@@ -192,6 +192,9 @@ export class StackManager {
       timeoutMs: stack.timeout,
       temperature: stack.temperature,
       maxTokens: stack.maxTokens,
+      tools: stack.tools,
+      thinking: stack.thinking,
+      cacheControl: stack.cacheControl,
       // CLI options override
       ...Object.fromEntries(
         Object.entries(options).filter(([_, v]) => v !== undefined)

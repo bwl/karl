@@ -7,6 +7,7 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync, readdirSync, unlinkSync } from 'fs';
 import { join, basename } from 'path';
 import { homedir } from 'os';
+import { spawnSync } from 'child_process';
 import { createInterface } from 'readline';
 import { loadConfig } from '../config.js';
 import { ModelConfig } from '../types.js';
@@ -142,6 +143,28 @@ function writeGlobalConfig(config: Record<string, unknown>): void {
     mkdirSync(dir, { recursive: true });
   }
   writeFileSync(GLOBAL_CONFIG_PATH, JSON.stringify(config, null, 2) + '\n');
+}
+
+function readProjectConfig(): Record<string, unknown> {
+  const projectPath = join(process.cwd(), '.karl.json');
+  if (!existsSync(projectPath)) {
+    return {};
+  }
+  try {
+    return JSON.parse(readFileSync(projectPath, 'utf-8'));
+  } catch {
+    return {};
+  }
+}
+
+function openInEditor(filePath: string): void {
+  const editor = process.env.EDITOR || process.env.VISUAL;
+  if (editor) {
+    spawnSync(editor, [filePath], { stdio: 'inherit' });
+  } else {
+    console.log(`File: ${filePath}`);
+    console.log('Set $EDITOR to open automatically.');
+  }
 }
 
 /**
@@ -489,6 +512,35 @@ export async function removeModel(alias: string) {
 }
 
 /**
+ * Edit a model (opens the model file or config containing it)
+ */
+export async function editModel(alias: string) {
+  const filePath = join(MODELS_DIR, `${alias}.json`);
+  if (existsSync(filePath)) {
+    openInEditor(filePath);
+    return;
+  }
+
+  const projectPath = join(process.cwd(), '.karl.json');
+  const projectConfig = readProjectConfig();
+  const projectModels = projectConfig.models as Record<string, unknown> | undefined;
+  if (projectModels && Object.prototype.hasOwnProperty.call(projectModels, alias)) {
+    openInEditor(projectPath);
+    return;
+  }
+
+  const globalConfig = readGlobalConfig();
+  const globalModels = globalConfig.models as Record<string, unknown> | undefined;
+  if (globalModels && Object.prototype.hasOwnProperty.call(globalModels, alias)) {
+    openInEditor(GLOBAL_CONFIG_PATH);
+    return;
+  }
+
+  console.error(`Model "${alias}" not found.`);
+  process.exit(1);
+}
+
+/**
  * Set the default model
  */
 export async function setDefaultModel(alias: string) {
@@ -722,6 +774,14 @@ export async function handleModelsCommand(args: string[]) {
       await setDefaultModel(rest[0]);
       break;
 
+    case 'edit':
+      if (rest.length === 0) {
+        console.error('Usage: karl models edit <alias>');
+        process.exit(1);
+      }
+      await editModel(rest[0]);
+      break;
+
     case 'refresh':
     case 'update':
       await refreshModels();
@@ -746,6 +806,7 @@ export async function handleModelsCommand(args: string[]) {
         console.error('  show <alias>      Show model details');
         console.error('  add [alias]       Add a new model');
         console.error('  remove <alias>    Remove a model');
+        console.error('  edit <alias>      Edit a model file');
         console.error('  default <alias>   Set the default model');
         console.error('  sync              Sync model registry from OpenRouter');
         console.error('  browse            Browse available models');
@@ -757,7 +818,7 @@ export async function handleModelsCommand(args: string[]) {
         console.error('  --offline         Use cached registry without syncing');
       } else {
         console.error(`Unknown models command: ${command}`);
-        console.error('Available commands: list, show, add, remove, default, sync, browse, refresh');
+        console.error('Available commands: list, show, add, remove, edit, default, sync, browse, refresh');
       }
       process.exit(1);
   }
