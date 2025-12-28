@@ -56,6 +56,7 @@ const BUILTIN_COMMANDS = new Set([
   'debugdesign', // UI simulation for design work
   'dd',        // Alias for debugdesign
   'completions', // Shell completion scripts
+  'serve',     // JSON-RPC server for IPC with other tools
 ]);
 
 /**
@@ -776,6 +777,12 @@ async function main() {
   else if (firstArg === 'completions') {
     const { handleCompletionsCommand } = await import('./commands/completions.js');
     await handleCompletionsCommand(args.slice(1));
+    return;
+  }
+  // Handle 'serve' command - JSON-RPC server for IPC
+  else if (firstArg === 'serve') {
+    const { handleServeCommand } = await import('./commands/serve.js');
+    await handleServeCommand();
     return;
   }
   // ─────────────────────────────────────────────────────────────────────────
