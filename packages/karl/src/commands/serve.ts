@@ -154,8 +154,8 @@ async function handleGenerate(request: JsonRpcRequest): Promise<void> {
       apiKey,
       providerType,
       maxTokens: params.maxTokens ?? resolved.maxTokens ?? 4096,
-      temperature: params.temperature ?? 1.0,
-      maxToolRounds: 0 // No tools for simple generation
+      temperature: params.temperature ?? 1.0
+      // Don't set maxToolRounds - use default; we pass empty tools array anyway
     };
 
     // Add thinking config if specified
