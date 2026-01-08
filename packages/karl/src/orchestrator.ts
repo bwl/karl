@@ -42,85 +42,55 @@ type Listener = (event: OrchestratorEvent) => void;
 // System Prompt
 // ============================================================================
 
-const ORCHESTRATOR_SYSTEM_PROMPT = `You are an orchestrator that accomplishes goals by delegating to karl.
+const ORCHESTRATOR_SYSTEM_PROMPT = `You are a strategic coordinator. You accomplish goals by delegating work to Karl, a capable coding agent.
 
-## Your Role
+## How This Works
 
-You don't write code directly. You think strategically, then delegate to karl.
-Each karl call is a focused, self-contained task. Karl has tools (bash, read, write, edit) and reasoning.
+You think about WHAT needs to happen. Karl figures out HOW to do it.
+
+When you want something done, use the karl() tool and describe what you want in plain English. Karl has access to the filesystem, git, shell commands, and code editing - you don't need to specify the exact commands.
+
+## Examples of Good Delegation
+
+User: "Review changes and commit them in logical chunks"
+You think: This is a multi-step task - review what changed, group related changes, commit with good messages
+You call: karl("run", "Review all uncommitted changes, group them by logical unit, and create separate commits for each group with descriptive messages")
+
+User: "Fix the authentication bug"
+You think: Karl needs to find the bug, understand the auth system, then fix it
+You call: karl("run", "Investigate and fix the authentication bug - look at recent changes and error logs to identify the issue")
+
+User: "Add dark mode support"
+You think: This is a feature request - Karl should figure out the implementation
+You call: karl("run", "Add dark mode support to the application - determine the best approach for this codebase and implement it")
 
 ## Your Tools
 
-### ivo_context(keywords)
+**karl(command, task)** - Delegate complex work to Karl
+- command: Usually "run" for most tasks. Also: "think" (analysis only), "review" (code review)
+- task: Describe what you want done in natural language. Be clear about the goal, not the steps.
 
-Search the codebase for keywords and gather relevant context.
-Returns a context_id (not the full content - that stays internal).
+**karl_cli(args)** - Manage karl configuration and coordination
+- Use for: stacks, models, skills, providers, and other meta-operations
+- Examples: "stacks list", "stacks create review", "models list", "skills list", "info"
+- NOT for actual work - use karl() to delegate grep, read, bash, code changes, etc.
 
-**IMPORTANT:** This is keyword search, not magic translation. Include synonyms!
+**ivo_context(keywords)** - Pre-load codebase context (optional)
+- Use when Karl needs broad context across many files
+- Pass comma-separated keywords/synonyms
+- Returns a context_id to pass to karl()
 
-**Examples:**
-\`\`\`
-ivo_context("auth, login, session, jwt, token")      // Good - synonyms
-ivo_context("authentication")                         // Basic - fewer matches
-ivo_context("cache, redis, store, persist, ttl")     // Feature area
-ivo_context("timeout, error, retry, connection")     // Bug hunting
-\`\`\`
+## Key Principles
 
-**Use for:**
-- Complex multi-file tasks
-- Understanding unfamiliar code areas
-- When you need broad context before implementing
+1. **Delegate outcomes, not procedures** - Say "fix the login bug" not "run grep for login, then read the file, then edit line 42"
 
-### karl(command, task, context_id?)
+2. **Trust Karl's judgment** - Karl knows how to use git, read files, and write code. You focus on the goal.
 
-Run karl with optional prepared context.
+3. **Think in tasks, not commands** - One karl() call can accomplish a lot. Don't micromanage.
 
-**Commands:**
-- \`run\` - General purpose coding agent (default)
-- \`read\` - Read files: \`karl("read", "src/app.ts")\`
-- \`bash\` - Run shell commands: \`karl("bash", "git status")\`
-- \`glob\` - Find files: \`karl("glob", "**/*.ts")\`
-- \`grep\` - Search code: \`karl("grep", "UserService")\`
-- \`think\` - Deep analysis without making changes
-- \`review\` - Code review
+4. **Be specific about WHAT, vague about HOW** - "Commit changes in logical groups" is good. "Run git add then git commit" is micromanaging.
 
-**Without context:**
-\`\`\`
-karl("grep", "handleTimeout")
-karl("read", "src/auth.ts")
-karl("run", "Fix null check on line 42")
-\`\`\`
-
-**With prepared context:**
-\`\`\`
-ivo_context("auth, login, session, jwt, token")
-karl("run", "Fix the timeout bug", "a7b2c3d")
-karl("run", "Add retry logic", "a7b2c3d")  // Reuse same context
-\`\`\`
-
-## Patterns
-
-**Simple tasks** - direct karl calls:
-\`\`\`
-karl("bash", "npm test")
-karl("read", "README.md")
-karl("grep", "AuthService")
-\`\`\`
-
-**Complex tasks** - gather context first:
-\`\`\`
-ivo_context("cache, redis, store, memory, ttl")
-karl("run", "Implement cache layer", context_id)
-karl("bash", "npm test")
-\`\`\`
-
-## Tips
-
-- Skip ivo_context for quick reads/greps/simple changes
-- Use ivo_context when spanning multiple files or unfamiliar areas
-- Include synonyms in keywords for better coverage (you are the thesaurus!)
-- Reuse context_id for related changes in the same area
-- Context stays internal - you only see summaries`;
+5. **Don't gather context yourself** - If Karl needs codebase context, use ivo_context() to prepare it. Don't try to read files and pass their contents manually. Let the tools handle context gathering.`;
 
 
 // ============================================================================
@@ -202,13 +172,13 @@ async function runIvoContext(keywords: string, budget: number): Promise<IvoResul
 function createIvoContextTool(emit: Emitter): ToolDefinition {
   return {
     name: 'ivo_context',
-    description: 'Search the codebase for keywords and gather relevant context. Returns a context_id to pass to karl(). Include synonyms for better coverage - this is keyword search, not magic translation.',
+    description: 'Pre-load codebase context for complex multi-file tasks. Returns a context_id to pass to karl(). Only use when Karl needs broad context across many files.',
     parameters: {
       type: 'object',
       properties: {
         keywords: {
           type: 'string',
-          description: 'Comma-separated keywords to search for. Include synonyms! Example: "auth, login, session, jwt, token"'
+          description: 'Comma-separated keywords to search for. Include synonyms for better coverage.'
         },
         budget: {
           type: 'number',
@@ -259,26 +229,26 @@ function createIvoContextTool(emit: Emitter): ToolDefinition {
 function createKarlTool(emit: Emitter, signal?: AbortSignal): ToolDefinition {
   return {
     name: 'karl',
-    description: 'Run a karl command to accomplish a task. Karl is a coding agent with access to bash, read, write, and edit tools. Optionally pass a context_id from ivo_prepare to include prepared context.',
+    description: 'Delegate a task to Karl, a capable coding agent. Describe what you want done in natural language - Karl handles the details. Karl can read/write files, run shell commands, use git, and edit code.',
     parameters: {
       type: 'object',
       properties: {
         command: {
           type: 'string',
-          description: 'The karl command: "run", "continue", or a stack name like "think", "debug", "review"'
+          description: 'Usually "run". Use "think" for analysis without changes, "review" for code review.'
         },
         task: {
           type: 'string',
-          description: 'The task description or prompt for karl'
+          description: 'What you want Karl to accomplish, in natural language. Focus on the goal, not the steps.'
         },
         context_id: {
           type: 'string',
-          description: 'Context ID from ivo_prepare (e.g., "a7b2c3d"). Karl will load the prepared context internally.'
+          description: 'Optional context ID from ivo_context() for complex multi-file tasks.'
         },
         flags: {
           type: 'array',
           items: { type: 'string' },
-          description: 'Additional flags like ["--verbose", "--timeout", "5m"]'
+          description: 'Additional flags (rarely needed)'
         }
       },
       required: ['command', 'task']
@@ -304,6 +274,90 @@ function createKarlTool(emit: Emitter, signal?: AbortSignal): ToolDefinition {
         }
 
         const child = spawn('karl', args, {
+          stdio: ['pipe', 'pipe', 'pipe'],
+          env: { ...process.env, FORCE_COLOR: '0' }
+        });
+
+        let stdout = '';
+        let stderr = '';
+
+        child.stdout?.on('data', (data: Buffer) => {
+          const chunk = data.toString();
+          stdout += chunk;
+          emit({ type: 'karl_output', chunk });
+        });
+
+        child.stderr?.on('data', (data: Buffer) => {
+          const chunk = data.toString();
+          stderr += chunk;
+          emit({ type: 'karl_output', chunk });
+        });
+
+        // Handle abort
+        const abortHandler = () => {
+          child.kill('SIGTERM');
+        };
+        signal?.addEventListener('abort', abortHandler);
+
+        child.on('close', (code) => {
+          signal?.removeEventListener('abort', abortHandler);
+          const success = code === 0;
+          const result = stdout || stderr || `(no output, exit code: ${code})`;
+          const durationMs = Date.now() - startTime;
+
+          emit({ type: 'karl_end', result, success, durationMs });
+
+          resolve({
+            content: [{ type: 'text', text: result }],
+            isError: !success
+          });
+        });
+
+        child.on('error', (error) => {
+          signal?.removeEventListener('abort', abortHandler);
+          const durationMs = Date.now() - startTime;
+          emit({ type: 'karl_end', result: error.message, success: false, durationMs });
+
+          resolve({
+            content: [{ type: 'text', text: `Error spawning karl: ${error.message}` }],
+            isError: true
+          });
+        });
+      });
+    }
+  };
+}
+
+// ============================================================================
+// Karl CLI Tool (configuration and coordination)
+// ============================================================================
+
+function createKarlCliTool(emit: Emitter, signal?: AbortSignal): ToolDefinition {
+  return {
+    name: 'karl_cli',
+    description: 'Manage karl configuration and coordination. Use for stacks, models, skills, providers, and meta-operations. NOT for actual work - use karl() to delegate grep, read, bash, code changes.',
+    parameters: {
+      type: 'object',
+      properties: {
+        args: {
+          type: 'string',
+          description: 'Karl CLI command. Examples: "stacks list", "stacks create review", "models list", "skills list", "providers list", "info"'
+        }
+      },
+      required: ['args']
+    },
+    execute: async (_toolCallId, params) => {
+      const { args } = params as { args: string };
+      const startTime = Date.now();
+
+      // Parse args string into array (simple split, handles quoted strings later if needed)
+      const argList = args.match(/(?:[^\s"]+|"[^"]*")+/g) || [];
+      const command = argList[0] || 'help';
+
+      emit({ type: 'karl_start', command, task: args });
+
+      return new Promise((resolve) => {
+        const child = spawn('karl', argList, {
           stdio: ['pipe', 'pipe', 'pipe'],
           env: { ...process.env, FORCE_COLOR: '0' }
         });
@@ -463,13 +517,14 @@ export class Orchestrator {
         cacheControl: providerType === 'anthropic'
       };
 
-      // Tools: ivo_prepare and karl
+      // Tools: ivo_context, karl (agent), and karl_cli (utility)
       const emit = (event: OrchestratorEvent) => this.emit(event);
       const signal = this.abortController.signal;
 
       const tools = [
         createIvoContextTool(emit),
-        createKarlTool(emit, signal)
+        createKarlTool(emit, signal),
+        createKarlCliTool(emit, signal)
       ];
 
       // Build full message history for agent loop
