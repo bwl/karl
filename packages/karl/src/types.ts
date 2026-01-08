@@ -59,6 +59,7 @@ export interface ModelConfig {
 export interface ProviderConfig {
   type: string;
   baseUrl?: string;
+  proxyUrl?: string;  // CORS proxy URL (e.g., http://localhost:3001)
   apiKey?: string;
   authType?: 'api_key' | 'oauth';
   [key: string]: unknown;
