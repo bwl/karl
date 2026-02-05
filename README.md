@@ -5,7 +5,7 @@
 ![Agent Skills](https://img.shields.io/badge/Agent%20Skills-Supported-brightgreen) ![Status](https://img.shields.io/badge/Status-Active-brightgreen)
 
 ```
-$ karl "how much energy from the sun reaches Earth each day?"
+$ karl run "how much energy from the sun reaches Earth each day?"
 
 Breakdown:
   - Solar constant: ~1361 W/m² at the top of Earth's atmosphere.
