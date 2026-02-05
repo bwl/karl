@@ -15,8 +15,6 @@ jobs:
         include:
           - os: macos-latest
             target: darwin-arm64
-          - os: macos-15-large
-            target: darwin-x64
           - os: ubuntu-latest
             target: linux-x64
 
@@ -57,6 +55,5 @@ jobs:
         with:
           files: |
             artifacts/karl-darwin-arm64/karl-darwin-arm64
-            artifacts/karl-darwin-x64/karl-darwin-x64
             artifacts/karl-linux-x64/karl-linux-x64
           generate_release_notes: true

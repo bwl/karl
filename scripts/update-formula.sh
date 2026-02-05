@@ -35,9 +35,6 @@ echo ""
 DARWIN_ARM64=$(curl -sL "$BASE_URL/karl-darwin-arm64" | shasum -a 256 | cut -d' ' -f1)
 echo "darwin-arm64: $DARWIN_ARM64"
 
-DARWIN_X64=$(curl -sL "$BASE_URL/karl-darwin-x64" | shasum -a 256 | cut -d' ' -f1)
-echo "darwin-x64:   $DARWIN_X64"
-
 LINUX_X64=$(curl -sL "$BASE_URL/karl-linux-x64" | shasum -a 256 | cut -d' ' -f1)
 echo "linux-x64:    $LINUX_X64"
 
@@ -49,20 +46,13 @@ echo "Updating $FORMULA..."
 # Update version
 sed -i '' "s/version \".*\"/version \"$VERSION\"/" "$FORMULA"
 
-# Update sha256 hashes
-sed -i '' "s/sha256 \"PLACEHOLDER_ARM64\"/sha256 \"$DARWIN_ARM64\"/" "$FORMULA"
-sed -i '' "s/sha256 \"PLACEHOLDER_X64\"/sha256 \"$DARWIN_X64\"/" "$FORMULA"
-sed -i '' "s/sha256 \"PLACEHOLDER_LINUX\"/sha256 \"$LINUX_X64\"/" "$FORMULA"
-
-# Also handle updates (non-placeholder values)
-# This uses a pattern to match any sha256 in the right context
+# Update sha256 hashes (handle both placeholders and existing hashes)
+# macOS section comes first, then Linux
 perl -i -pe "
-  if (/on_arm/) { \$in_arm = 1 }
-  if (/on_intel/) { \$in_arm = 0; \$in_intel = 1 }
-  if (/on_linux/) { \$in_intel = 0; \$in_linux = 1 }
-  if (\$in_arm && /sha256/) { s/sha256 \"[a-f0-9]+\"/sha256 \"$DARWIN_ARM64\"/ }
-  if (\$in_intel && /sha256/) { s/sha256 \"[a-f0-9]+\"/sha256 \"$DARWIN_X64\"/; \$in_intel = 0 }
-  if (\$in_linux && /sha256/) { s/sha256 \"[a-f0-9]+\"/sha256 \"$LINUX_X64\"/; \$in_linux = 0 }
+  if (/on_macos/) { \$in_macos = 1 }
+  if (/on_linux/) { \$in_macos = 0; \$in_linux = 1 }
+  if (\$in_macos && /sha256/) { s/sha256 \"[^\"]+\"/sha256 \"$DARWIN_ARM64\"/; \$in_macos = 0 }
+  if (\$in_linux && /sha256/) { s/sha256 \"[^\"]+\"/sha256 \"$LINUX_X64\"/; \$in_linux = 0 }
 " "$FORMULA"
 
 echo "✓ Formula updated"
