@@ -6,7 +6,16 @@
       "Bash(rp-cli:*)",
       "WebFetch(domain:docs.anthropic.com)",
       "Bash(bun run build:ivo:*)",
-      "Bash(ivo context:*)"
+      "Bash(ivo context:*)",
+      "Bash(gh release view:*)",
+      "Bash(bun run build:*)",
+      "Bash(node:*)",
+      "WebFetch(domain:aider.chat)",
+      "WebSearch",
+      "WebFetch(domain:github.com)",
+      "WebFetch(domain:developers.openai.com)",
+      "WebFetch(domain:opencode.ai)",
+      "WebFetch(domain:opencodeguide.com)"
     ]
   }
 }
