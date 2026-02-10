@@ -1,5 +1,5 @@
 /**
- * Ivo - Context Intelligence Engine for Karl
+ * Ivo - Context Intelligence Engine
  *
  * Library exports for programmatic use.
  */

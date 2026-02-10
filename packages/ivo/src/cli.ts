@@ -1,9 +1,9 @@
 #!/usr/bin/env bun
 /**
- * Ivo CLI - Context Intelligence Engine for Karl
+ * Ivo CLI - Context Intelligence Engine
  *
  * Named after Ivo Karlović, the elite scout who knows where to aim.
- * Ivo prepares optimal context before Karl serves.
+ * Ivo prepares optimal context before your AI code agent serves.
  */
 
 import { Command } from 'commander';
@@ -28,9 +28,9 @@ const program = new Command();
 program
   .name('ivo')
   .description(
-    `Ivo - Context Intelligence Engine for Karl
+    `Ivo - Context Intelligence Engine
 
-Ivo prepares optimal context before Karl executes tasks.
+Ivo prepares optimal context for AI code agents.
 Like a tennis scout who analyzes the court, Ivo identifies
 the most relevant files and builds efficient context.`
   )
