@@ -137,8 +137,9 @@ Examples:
             const task = ctx.task.length > 40
               ? ctx.task.slice(0, 37) + '...'
               : ctx.task;
+            const pin = ctx.pinned ? ' [pinned]' : '';
             console.log(
-              `  ${ctx.id}  ${String(ctx.files).padStart(3)} files  ${formatTokens(ctx.tokens).padStart(6)} ${usage.padStart(5)}  ${age.padStart(8)}  ${task}`
+              `  ${ctx.id}  ${String(ctx.files).padStart(3)} files  ${formatTokens(ctx.tokens).padStart(6)} ${usage.padStart(5)}  ${age.padStart(8)}  ${task}${pin}`
             );
           }
           console.log('');

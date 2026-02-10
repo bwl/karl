@@ -10,15 +10,14 @@ import type { OutputFormat } from '../types.js';
 import type { SliceIntensity, SliceStrategy, SliceStrategyCaps, SlicePlan, SliceRequest } from '../slicer/types.js';
 import { CANDIDATE_SORT, createSlicerEngine, rankCandidates } from '../slicer/engine.js';
 import { formatContext } from '../output/index.js';
-import { runBucketTui } from '../ui/bucket.js';
-import { loadHistoryContext } from '../history.js';
+import { loadConfig } from '../config.js';
 
 const DEFAULT_BUDGET = 32000;
 
 const DEFAULT_STRATEGIES: Record<SliceIntensity, SliceStrategy[]> = {
   lite: ['inventory', 'skeleton', 'keyword', 'config'],
-  standard: ['inventory', 'skeleton', 'keyword', 'symbols', 'config', 'diff'],
-  deep: ['inventory', 'skeleton', 'keyword', 'symbols', 'config', 'diff', 'ast', 'complexity', 'docs'],
+  standard: ['inventory', 'skeleton', 'keyword', 'symbols', 'config', 'diff', 'graph'],
+  deep: ['inventory', 'skeleton', 'keyword', 'symbols', 'config', 'diff', 'graph', 'ast', 'complexity', 'docs'],
 };
 
 const DEFAULT_INTENSITY: SliceIntensity = 'deep';
@@ -30,6 +29,7 @@ const AVAILABLE_STRATEGIES: SliceStrategy[] = [
   'symbols',
   'config',
   'diff',
+  'graph',
   'ast',
   'complexity',
   'docs',
@@ -41,9 +41,9 @@ export function registerBucketCommand(program: Command, getBackend: () => Promis
     .alias('fill')
     .description('Fill a context bucket with fine-grained strategy control')
     .option('-b, --budget <n>', 'Token budget limit', parseInt)
-    .option('-i, --intensity <level>', 'Intensity: lite, standard, deep', 'deep')
+    .option('-i, --intensity <level>', 'Intensity: lite, standard, deep')
     .option('-s, --strategies <list>', 'Comma-separated strategies to include')
-    .option('--format <format>', 'Output format: xml, markdown, or json', 'xml')
+    .option('--format <format>', 'Output format: xml, markdown, or json')
     .option('--strategy-max-items <spec>', 'Per-strategy max items (e.g. keyword=20,docs=5)')
     .option('--strategy-max-tokens <spec>', 'Per-strategy max tokens (e.g. keyword=2000,docs=1200)')
     .option('--tree', 'Include a tree overview in the output')
@@ -66,6 +66,7 @@ Strategies:
   symbols     - Codemaps for matched files
   config      - Config files (package.json, tsconfig, etc.)
   diff        - Recently changed files
+  graph       - Import graph traversal from matched files
   ast         - AST-based codemaps for keyword matches
   complexity  - Codemaps of largest/most complex files
   docs        - Documentation files
@@ -88,9 +89,10 @@ Examples:
       try {
         const backend = await getBackend();
         const engine = createSlicerEngine(backend);
+        const config = await loadConfig();
 
-        let budget = Number.isFinite(options.budget) ? options.budget : DEFAULT_BUDGET;
-        let intensity = normalizeIntensity(options.intensity as SliceIntensity);
+        let budget = Number.isFinite(options.budget) ? options.budget : (config.defaults?.budget ?? DEFAULT_BUDGET);
+        let intensity = normalizeIntensity((options.intensity ?? config.defaults?.intensity ?? 'deep') as SliceIntensity);
         let strategies = parseStrategies(options.strategies, intensity);
         let includeTree = Boolean(options.tree);
         let strategyIntensity: Partial<Record<SliceStrategy, SliceIntensity>> | undefined;
@@ -99,7 +101,7 @@ Examples:
         const allowInteractive = options.interactive !== false;
         const useUi = Boolean(options.ui);
 
-        if (allowInteractive && !useUi) {
+        if (allowInteractive) {
           const prompt = createInterface({ input, output });
 
           if (!task) {
@@ -159,11 +161,8 @@ Examples:
         }
 
         if (!task || !task.trim()) {
-          if (!useUi) {
-            console.error('Error: Task is required for bucket filling.');
-            process.exit(1);
-          }
-          task = '';
+          console.error('Error: Task is required for bucket filling.');
+          process.exit(1);
         }
 
         const request = {
@@ -177,27 +176,16 @@ Examples:
           strategyCaps,
         };
 
-        let plan: SlicePlan;
-        let outputFormat = options.format as OutputFormat;
-        let includePreviousResponse = false;
-
         if (useUi) {
-          const tuiResult = await runBucketTui(engine, request, {
-            strategiesLocked,
-            initialFormat: outputFormat,
-          });
-          if (!tuiResult) {
-            console.error('Aborted.');
-            process.exit(0);
-          }
-          plan = tuiResult.plan;
-          outputFormat = tuiResult.format;
-          includePreviousResponse = tuiResult.includePreviousResponse;
-        } else {
-          plan = await engine.plan(request);
+          console.error('The --ui flag requires ivo-tui (a separate package).');
+          console.error('Install it with: bun add -g ivo-tui');
+          process.exit(1);
         }
 
-        if (allowInteractive && !useUi) {
+        let outputFormat = (options.format ?? config.defaults?.format ?? 'xml') as OutputFormat;
+        const plan = await engine.plan(request);
+
+        if (allowInteractive) {
           printPlanSummary(plan);
           const confirm = await confirmProceed();
           if (!confirm) {
@@ -207,17 +195,6 @@ Examples:
         }
 
         const result = await engine.assemble(plan, budget);
-        if (includePreviousResponse && !options.json) {
-          try {
-            const history = await loadHistoryContext({ limit: 1, full: true }, process.cwd());
-            if (history) {
-              result.context.history = history;
-            }
-          } catch (error) {
-            const message = error instanceof Error ? error.message : String(error);
-            console.error(`History unavailable: ${message}`);
-          }
-        }
         if (options.json) {
           const orderedCandidates = rankCandidates(plan);
           const payload = {

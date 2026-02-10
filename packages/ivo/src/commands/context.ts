@@ -2,7 +2,7 @@
  * Context Command - Build optimal context for a task
  *
  * Builds context and saves to .ivo/contexts/{id}.xml
- * Returns a summary with git-style ID for passing to karl.
+ * Returns a summary with git-style ID for use with any AI code agent.
  */
 
 import type { Command } from 'commander';
@@ -10,6 +10,8 @@ import type { IvoBackend } from '../backends/types.js';
 import type { ContextOptions, OutputFormat } from '../types.js';
 import { formatContext } from '../output/index.js';
 import { saveContext } from '../context-store.js';
+import { loadConfig } from '../config.js';
+import { getUsageHint, getExampleHints } from '../hints.js';
 
 export function registerContextCommand(program: Command, getBackend: () => Promise<IvoBackend>): void {
   program
@@ -17,28 +19,31 @@ export function registerContextCommand(program: Command, getBackend: () => Promi
     .alias('ctx')
     .description('Build context by searching for keywords in the codebase')
     .option('-b, --budget <n>', 'Token budget limit', parseInt)
-    .option('-f, --format <format>', 'Output format: xml, markdown, or json', 'xml')
+    .option('-f, --format <format>', 'Output format: xml, markdown, or json')
     .option('--full', 'Output full context instead of summary + ID')
     .option('--snapshot', 'Get current context snapshot (no keyword search)')
     .addHelpText(
       'after',
       `
 Keywords:
-  Ivo searches your codebase for the keywords you provide. There is no magic
-  translation - include synonyms and related terms for better coverage.
+  Ivo searches your codebase for the keywords you provide and auto-expands
+  them with common synonyms (e.g., "auth" also searches login, session, jwt).
 
-  Good:  "auth, login, session, jwt, token, credentials"
-  Basic: "authentication"
+  Set IVO_LLM_ENDPOINT or run 'ivo setup' for AI-powered expansion.
+  Results are cached in .ivo/cache/synonyms.json.
 
-  Up to 12 keywords are used. Stopwords (the, and, for, etc.) are ignored.
+  Up to 20 expanded keywords are used. Stopwords (the, and, for, etc.) are ignored.
 
 Examples:
   # Search with synonyms for best coverage
   ivo context "auth, login, session, jwt, token"
   # Output: a7b2c3d  45 files  28.5k tokens  (89% of 32k)
 
-  # Use the context ID with karl
-  karl run "Fix the auth bug" --context a7b2c3d
+  # Use the context ID with your agent
+  ivo get a7b2c3d | claude -p "fix the auth bug"
+  karl run "fix the auth bug" --context a7b2c3d
+  ivo get a7b2c3d | codex exec -
+  ivo get a7b2c3d | pbcopy
 
   # Bug hunting - include error-related terms
   ivo context "timeout, error, retry, connection, socket"
@@ -59,8 +64,9 @@ Examples:
     .action(async (task: string | undefined, options) => {
       try {
         const backend = await getBackend();
-        const budget = options.budget ?? 32000;
-        const format = options.format as OutputFormat;
+        const config = await loadConfig();
+        const budget = options.budget ?? config.defaults?.budget ?? 32000;
+        const format = (options.format ?? config.defaults?.format ?? 'xml') as OutputFormat;
 
         const contextOpts: ContextOptions = {
           format,
@@ -115,9 +121,9 @@ Examples:
           }
         }
 
-        // Hint for usage
+        // Hint for usage (rotates between agents)
         console.log('');
-        console.log(`Use: karl run "task" --context ${meta.id}`);
+        console.log(getUsageHint(meta.id));
       } catch (error) {
         if (error instanceof Error) {
           console.error(`Error: ${error.message}`);

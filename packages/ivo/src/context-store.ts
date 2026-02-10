@@ -20,6 +20,7 @@ export interface ContextMeta {
   tokens: number;
   budget: number;
   createdAt: string;
+  pinned?: boolean;
 }
 
 // ============================================================================
@@ -74,7 +75,8 @@ export async function ensureContextsDir(cwd: string = process.cwd()): Promise<vo
 export async function saveContext(
   content: string,
   meta: Partial<Omit<ContextMeta, 'id' | 'createdAt'>>,
-  cwd: string = process.cwd()
+  cwd: string = process.cwd(),
+  pinned?: boolean
 ): Promise<ContextMeta> {
   await ensureContextsDir(cwd);
 
@@ -85,7 +87,8 @@ export async function saveContext(
     files: meta.files ?? 0,
     tokens: meta.tokens ?? 0,
     budget: meta.budget ?? 0,
-    createdAt: new Date().toISOString()
+    createdAt: new Date().toISOString(),
+    ...(pinned ? { pinned: true } : {}),
   };
 
   // Write content and metadata
@@ -174,7 +177,30 @@ export async function findContextById(partialId: string, cwd: string = process.c
 }
 
 /**
+ * Pin a context so it won't be auto-cleaned.
+ */
+export async function pinContext(id: string, cwd: string = process.cwd()): Promise<boolean> {
+  const meta = await loadContextMeta(id, cwd);
+  if (!meta) return false;
+  meta.pinned = true;
+  await fs.writeFile(getMetaPath(meta.id, cwd), JSON.stringify(meta, null, 2), 'utf-8');
+  return true;
+}
+
+/**
+ * Unpin a context so it can be auto-cleaned.
+ */
+export async function unpinContext(id: string, cwd: string = process.cwd()): Promise<boolean> {
+  const meta = await loadContextMeta(id, cwd);
+  if (!meta) return false;
+  delete meta.pinned;
+  await fs.writeFile(getMetaPath(meta.id, cwd), JSON.stringify(meta, null, 2), 'utf-8');
+  return true;
+}
+
+/**
  * Clean up old context files.
+ * Pinned contexts are never deleted.
  * @param maxAgeMs Maximum age in milliseconds (default: 24 hours)
  * @param maxCount Maximum number of contexts to keep (default: 50)
  */
@@ -189,7 +215,7 @@ export async function cleanupOldContexts(
 
     // Get all .meta.json files with their stats
     const metaFiles = entries.filter(f => f.endsWith('.meta.json'));
-    const contextInfos: Array<{ id: string; createdAt: Date }> = [];
+    const contextInfos: Array<{ id: string; createdAt: Date; pinned: boolean }> = [];
 
     for (const file of metaFiles) {
       try {
@@ -197,7 +223,8 @@ export async function cleanupOldContexts(
         const meta = JSON.parse(content) as ContextMeta;
         contextInfos.push({
           id: meta.id,
-          createdAt: new Date(meta.createdAt)
+          createdAt: new Date(meta.createdAt),
+          pinned: Boolean(meta.pinned),
         });
       } catch {
         // Skip malformed meta files
@@ -209,14 +236,19 @@ export async function cleanupOldContexts(
 
     const now = Date.now();
     const toDelete: string[] = [];
+    let unpinnedIndex = 0;
 
-    contextInfos.forEach((info, index) => {
+    for (const info of contextInfos) {
+      // Never delete pinned contexts
+      if (info.pinned) continue;
+
       const age = now - info.createdAt.getTime();
-      // Delete if too old OR if beyond max count
-      if (age > maxAgeMs || index >= maxCount) {
+      // Delete if too old OR if beyond max count (among unpinned)
+      if (age > maxAgeMs || unpinnedIndex >= maxCount) {
         toDelete.push(info.id);
       }
-    });
+      unpinnedIndex++;
+    }
 
     // Delete context and meta files
     for (const id of toDelete) {
