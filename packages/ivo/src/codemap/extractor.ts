@@ -164,6 +164,24 @@ function extractSignature(node: SyntaxNode, source: string, language: SupportedL
         firstLine = firstLine.slice(0, firstLine.indexOf('{')).trim();
       }
       break;
+
+    case 'python':
+      // Strip decorator lines if present (they appear before def)
+      firstLine = firstLine.replace(/^@\w+.*\n\s*/, '');
+      firstLine = firstLine.replace(/^(async\s+)?def\s+/, '');
+      if (firstLine.includes(':')) {
+        firstLine = firstLine.slice(0, firstLine.lastIndexOf(':')).trim();
+      }
+      break;
+
+    case 'go':
+      firstLine = firstLine.replace(/^func\s+/, '');
+      // Strip receiver prefix: (r *Type) → just the function name onwards
+      firstLine = firstLine.replace(/^\([^)]*\)\s*/, '');
+      if (firstLine.includes('{')) {
+        firstLine = firstLine.slice(0, firstLine.indexOf('{')).trim();
+      }
+      break;
   }
 
   return firstLine.trim();

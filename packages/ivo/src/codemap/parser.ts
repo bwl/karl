@@ -13,7 +13,9 @@ export type SupportedLanguage =
   | 'typescript'
   | 'tsx'
   | 'javascript'
-  | 'rust';
+  | 'rust'
+  | 'python'
+  | 'go';
 
 // Map of language to loaded grammar
 const loadedLanguages: Map<SupportedLanguage, unknown> = new Map();
@@ -30,6 +32,8 @@ const EXTENSION_LANGUAGE_MAP: Record<string, SupportedLanguage> = {
   '.mjs': 'javascript',
   '.cjs': 'javascript',
   '.rs': 'rust',
+  '.py': 'python',
+  '.go': 'go',
 };
 
 /**
@@ -75,6 +79,16 @@ export async function loadLanguage(lang: SupportedLanguage): Promise<unknown> {
       language = rustPackage.default ?? rustPackage;
       break;
 
+    case 'python':
+      const pyPackage = await import('tree-sitter-python');
+      language = pyPackage.default ?? pyPackage;
+      break;
+
+    case 'go':
+      const goPackage = await import('tree-sitter-go');
+      language = goPackage.default ?? goPackage;
+      break;
+
     default:
       throw new Error(`Unsupported language: ${lang}`);
   }
@@ -105,14 +119,14 @@ export function detectLanguage(filePath: string): SupportedLanguage | null {
  * Check if a language is supported
  */
 export function isLanguageSupported(lang: string): lang is SupportedLanguage {
-  return ['typescript', 'tsx', 'javascript', 'rust'].includes(lang);
+  return ['typescript', 'tsx', 'javascript', 'rust', 'python', 'go'].includes(lang);
 }
 
 /**
  * Get list of supported languages
  */
 export function getSupportedLanguages(): SupportedLanguage[] {
-  return ['typescript', 'tsx', 'javascript', 'rust'];
+  return ['typescript', 'tsx', 'javascript', 'rust', 'python', 'go'];
 }
 
 /**
