@@ -43,6 +43,12 @@ function formatFile(file: ContextFile, indent: string = '    '): string {
   if (file.relevance !== undefined) {
     attrs.push(`relevance="${file.relevance.toFixed(2)}"`);
   }
+  if (file.strategy) {
+    attrs.push(`strategy="${escapeXml(file.strategy)}"`);
+  }
+  if (file.reason) {
+    attrs.push(`reason="${escapeXml(file.reason)}"`);
+  }
 
   const lines: string[] = [];
   lines.push(`${indent}<file ${attrs.join(' ')}>`);
@@ -90,6 +96,17 @@ export function formatXml(result: ContextResult): string {
     lines.push(`    <budget_usage>${usage}%</budget_usage>`);
   }
   lines.push('  </summary>');
+
+  // Strategy breakdown
+  if (result.strategies && Object.keys(result.strategies).length > 0) {
+    lines.push('  <context_summary>');
+    lines.push('    <strategies_used>');
+    for (const [name, stats] of Object.entries(result.strategies)) {
+      lines.push(`      <strategy name="${escapeXml(name)}" files="${stats.count}" tokens="${stats.tokens}" />`);
+    }
+    lines.push('    </strategies_used>');
+    lines.push('  </context_summary>');
+  }
 
   // Prompt (instructions)
   if (result.prompt) {

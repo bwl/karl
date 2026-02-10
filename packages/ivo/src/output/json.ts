@@ -34,6 +34,8 @@ export function formatJson(result: ContextResult, pretty: boolean = true): strin
       tokens: f.tokens,
       mode: f.mode,
       relevance: f.relevance,
+      reason: f.reason,
+      strategy: f.strategy,
       content: f.content,
       codemap: f.codemap,
     })),

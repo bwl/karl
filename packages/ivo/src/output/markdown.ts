@@ -44,10 +44,16 @@ function formatFile(file: ContextFile): string {
   const meta: string[] = [];
   meta.push(`**Tokens**: ${formatTokens(file.tokens)}`);
   meta.push(`**Mode**: ${file.mode}`);
+  if (file.strategy) {
+    meta.push(`**Strategy**: ${file.strategy}`);
+  }
   if (file.relevance !== undefined) {
     meta.push(`**Relevance**: ${(file.relevance * 100).toFixed(0)}%`);
   }
   lines.push(meta.join(' | '));
+  if (file.reason) {
+    lines.push(`> ${file.reason}`);
+  }
   lines.push('');
 
   if (file.content) {
@@ -125,6 +131,15 @@ export function formatMarkdown(result: ContextResult): string {
   if (result.budget) {
     const usage = ((result.totalTokens / result.budget) * 100).toFixed(1);
     lines.push(`- **Budget Usage**: ${usage}%`);
+  }
+
+  if (result.strategies && Object.keys(result.strategies).length > 0) {
+    lines.push('');
+    lines.push('| Strategy | Files | Tokens |');
+    lines.push('|----------|------:|-------:|');
+    for (const [name, stats] of Object.entries(result.strategies)) {
+      lines.push(`| ${name} | ${stats.count} | ${formatTokens(stats.tokens)} |`);
+    }
   }
 
   lines.push('');
