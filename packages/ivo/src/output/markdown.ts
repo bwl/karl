@@ -176,6 +176,16 @@ export function formatMarkdown(result: ContextResult): string {
     lines.push('');
   }
 
+  // Forest knowledge graph
+  if (result.forest) {
+    lines.push('## Knowledge Graph');
+    lines.push('');
+    lines.push('```xml');
+    lines.push(result.forest);
+    lines.push('```');
+    lines.push('');
+  }
+
   // Files
   if (result.files.length > 0) {
     lines.push('## Files');

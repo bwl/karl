@@ -5,7 +5,7 @@
 import { spawn } from 'child_process';
 import { readFile, stat } from 'fs/promises';
 import { existsSync } from 'fs';
-import { join, relative } from 'path';
+import { basename, join, relative } from 'path';
 import type { IvoBackend } from '../backends/types.js';
 import type { ContextFile, ContextResult, SearchMatch } from '../types.js';
 import { detectLanguage, extractCodemap, formatCodemapCompact } from '../codemap/index.js';
@@ -33,8 +33,8 @@ const DEFAULT_WARNING = 0.75;
 
 const DEFAULT_STRATEGIES: Record<SliceIntensity, SliceStrategy[]> = {
   lite: ['inventory', 'skeleton', 'keyword', 'config'],
-  standard: ['inventory', 'skeleton', 'keyword', 'symbols', 'config', 'diff', 'graph'],
-  deep: ['inventory', 'skeleton', 'keyword', 'symbols', 'config', 'diff', 'graph', 'ast', 'complexity', 'docs'],
+  standard: ['inventory', 'skeleton', 'keyword', 'symbols', 'config', 'diff', 'graph', 'forest'],
+  deep: ['inventory', 'skeleton', 'keyword', 'symbols', 'config', 'diff', 'graph', 'ast', 'complexity', 'docs', 'forest'],
 };
 
 const DEFAULT_INTENSITY: SliceIntensity = 'deep';
@@ -45,6 +45,7 @@ const STRATEGY_BUDGET_CAPS: Partial<Record<SliceStrategy, number>> = {
   diff: 0.10,     // Max 10% for recent changes
   graph: 0.15,    // Max 15% for import graph
   docs: 0.10,     // Max 10% for docs
+  forest: 0.25,   // Max 25% for forest knowledge graph
 };
 
 const STRATEGY_WEIGHTS: Record<SliceStrategy, number> = {
@@ -59,6 +60,7 @@ const STRATEGY_WEIGHTS: Record<SliceStrategy, number> = {
   ast: 0.5,
   complexity: 0.4,
   docs: 0.30,      // Reduced - should be lower priority than code
+  forest: 0.70,    // Knowledge graph - high value between keyword and skeleton
 };
 
 const REPRESENTATION_RANK: Record<SliceCandidate['representation'], number> = {
@@ -588,6 +590,33 @@ async function getGitDiffPaths(repoRoot: string): Promise<string[]> {
   return Array.from(paths);
 }
 
+async function detectProjectName(repoRoot: string): Promise<string | null> {
+  if (!repoRoot || repoRoot === '/') return null;
+
+  // Try package.json
+  try {
+    const pkg = await readFile(join(repoRoot, 'package.json'), 'utf-8');
+    const name = JSON.parse(pkg)?.name;
+    if (name && typeof name === 'string') return name;
+  } catch { /* skip */ }
+
+  // Try Cargo.toml
+  try {
+    const cargo = await readFile(join(repoRoot, 'Cargo.toml'), 'utf-8');
+    const match = cargo.match(/^name\s*=\s*"([^"]+)"/m);
+    if (match) return match[1];
+  } catch { /* skip */ }
+
+  // Try pyproject.toml
+  try {
+    const pyproject = await readFile(join(repoRoot, 'pyproject.toml'), 'utf-8');
+    const match = pyproject.match(/^name\s*=\s*"([^"]+)"/m);
+    if (match) return match[1];
+  } catch { /* skip */ }
+
+  return basename(repoRoot) || null;
+}
+
 export class SlicerEngine {
   private backend: IvoBackend;
 
@@ -1049,6 +1078,39 @@ export class SlicerEngine {
       }
     }
 
+    // Forest strategy: pull knowledge graph context from Forest
+    let forestData: { content: string; tokens: number } | undefined;
+    if (strategies.includes('forest')) {
+      const projectName = await detectProjectName(request.repoRoot);
+      const budgetSlice = Math.floor(budgetTokens * (STRATEGY_BUDGET_CAPS.forest ?? 0.25));
+
+      if (budgetSlice < 500) {
+        warnings.push('Forest strategy skipped: budget slice too small (< 500 tokens).');
+      } else if (!projectName) {
+        warnings.push('Forest strategy skipped: could not detect project name.');
+      } else {
+        const keywords = baseKeywords.slice(0, 10);
+        const forestArgs = [
+          'context',
+          '--tag', `project:${projectName}`,
+          '--query', keywords.join(', '),
+          '--budget', String(budgetSlice),
+        ];
+        const forestResult = await exec('forest', forestArgs);
+
+        if (forestResult.exitCode !== 0 || !forestResult.stdout.trim()) {
+          warnings.push(`Forest strategy skipped: ${forestResult.stderr.trim() || 'no output from forest CLI'}.`);
+        } else {
+          const forestTokens = estimateTokens(forestResult.stdout);
+          if (forestTokens < 100) {
+            warnings.push('Forest strategy skipped: output too small (< 100 tokens).');
+          } else {
+            forestData = { content: forestResult.stdout, tokens: forestTokens };
+          }
+        }
+      }
+    }
+
     if (strategies.includes('complexity')) {
       const complexityIntensity = resolveIntensity('complexity', request, intensity);
       const limit = complexityIntensity === 'lite' ? 10 : complexityIntensity === 'deep' ? 40 : 20;
@@ -1129,7 +1191,9 @@ export class SlicerEngine {
     const cappedCandidates = applyStrategyCaps(candidates, request);
     const merged = mergeCandidates(cappedCandidates);
     const strategyTotals = buildStrategyTotals(merged);
-    const totalTokens = merged.reduce((sum, candidate) => sum + candidate.tokens, 0) + (tree?.tokens ?? 0);
+    const totalTokens = merged.reduce((sum, candidate) => sum + candidate.tokens, 0)
+      + (tree?.tokens ?? 0)
+      + (forestData?.tokens ?? 0);
 
     return {
       request: {
@@ -1143,6 +1207,7 @@ export class SlicerEngine {
       strategyTotals,
       warnings,
       tree,
+      forest: forestData,
       totalTokens,
     };
   }
@@ -1156,6 +1221,12 @@ export class SlicerEngine {
     if (plan.tree && plan.tree.tokens <= remaining) {
       treeTokens = plan.tree.tokens;
       remaining -= treeTokens;
+    }
+
+    let forestTokens = 0;
+    if (plan.forest && plan.forest.tokens <= remaining) {
+      forestTokens = plan.forest.tokens;
+      remaining -= forestTokens;
     }
 
     const sorted = rankCandidates(plan);
@@ -1223,6 +1294,10 @@ export class SlicerEngine {
       inv.tokens += treeTokens;
       strategies['inventory'] = inv;
     }
+    // Add forest stats if present
+    if (plan.forest && forestTokens > 0) {
+      strategies['forest'] = { count: 0, tokens: forestTokens };
+    }
 
     const totalTokens = budgetTokens - remaining;
     const context: ContextResult = {
@@ -1232,6 +1307,7 @@ export class SlicerEngine {
       budget: budgetTokens,
       strategies,
       tree: plan.tree && treeTokens > 0 ? plan.tree.content : undefined,
+      forest: plan.forest && forestTokens > 0 ? plan.forest.content : undefined,
     };
 
     return {

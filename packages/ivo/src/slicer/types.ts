@@ -13,6 +13,7 @@ export type SliceStrategy =
   | 'graph'
   | 'complexity'
   | 'docs'
+  | 'forest'
   | 'explicit';
 
 export type SliceRepresentation = 'full' | 'snippet' | 'codemap' | 'reference';
@@ -71,6 +72,7 @@ export interface SlicePlan {
   strategyTotals: Record<string, { tokens: number; count: number }>;
   warnings: string[];
   tree?: SliceTree;
+  forest?: { content: string; tokens: number };
   totalTokens: number;
 }
 

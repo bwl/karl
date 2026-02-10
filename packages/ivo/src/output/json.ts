@@ -29,6 +29,7 @@ export function formatJson(result: ContextResult, pretty: boolean = true): strin
     },
     prompt: result.prompt,
     tree: result.tree,
+    forest: result.forest,
     files: result.files.map((f) => ({
       path: f.path,
       tokens: f.tokens,

@@ -191,6 +191,7 @@ export interface ContextResult {
   plan?: string;
   prompt?: string;
   tree?: string;
+  forest?: string;
   chatId?: string;
   history?: ContextHistory;
 }

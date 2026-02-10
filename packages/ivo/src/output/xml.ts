@@ -132,6 +132,13 @@ export function formatXml(result: ContextResult): string {
     lines.push('  </directory_structure>');
   }
 
+  // Forest knowledge graph
+  if (result.forest) {
+    lines.push('  <forest_context>');
+    lines.push(`    ${wrapContent(result.forest)}`);
+    lines.push('  </forest_context>');
+  }
+
   // Files
   if (result.files.length > 0) {
     lines.push('  <files>');

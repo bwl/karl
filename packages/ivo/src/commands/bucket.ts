@@ -16,8 +16,8 @@ const DEFAULT_BUDGET = 32000;
 
 const DEFAULT_STRATEGIES: Record<SliceIntensity, SliceStrategy[]> = {
   lite: ['inventory', 'skeleton', 'keyword', 'config'],
-  standard: ['inventory', 'skeleton', 'keyword', 'symbols', 'config', 'diff', 'graph'],
-  deep: ['inventory', 'skeleton', 'keyword', 'symbols', 'config', 'diff', 'graph', 'ast', 'complexity', 'docs'],
+  standard: ['inventory', 'skeleton', 'keyword', 'symbols', 'config', 'diff', 'graph', 'forest'],
+  deep: ['inventory', 'skeleton', 'keyword', 'symbols', 'config', 'diff', 'graph', 'ast', 'complexity', 'docs', 'forest'],
 };
 
 const DEFAULT_INTENSITY: SliceIntensity = 'deep';
@@ -33,6 +33,7 @@ const AVAILABLE_STRATEGIES: SliceStrategy[] = [
   'ast',
   'complexity',
   'docs',
+  'forest',
 ];
 
 export function registerBucketCommand(program: Command, getBackend: () => Promise<IvoBackend>): void {
@@ -70,6 +71,7 @@ Strategies:
   ast         - AST-based codemaps for keyword matches
   complexity  - Codemaps of largest/most complex files
   docs        - Documentation files
+  forest      - Knowledge graph context from Forest
 
 Examples:
   # Quick context with defaults
@@ -205,6 +207,7 @@ Examples:
               warnings: plan.warnings,
               totalTokens: plan.totalTokens,
               tree: plan.tree,
+              forest: plan.forest,
               candidates: orderedCandidates,
             },
             result: {
@@ -333,6 +336,9 @@ function printPlanSummary(plan: SlicePlan): void {
   }
   if (plan.tree) {
     console.error(`  tree: ${formatTokens(plan.tree.tokens)} tokens`);
+  }
+  if (plan.forest) {
+    console.error(`  forest: ${formatTokens(plan.forest.tokens)} tokens`);
   }
   if (plan.warnings.length) {
     console.error('Warnings:');
