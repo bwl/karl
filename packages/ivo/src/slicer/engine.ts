@@ -9,6 +9,8 @@ import { join, relative } from 'path';
 import type { IvoBackend } from '../backends/types.js';
 import type { ContextFile, ContextResult, SearchMatch } from '../types.js';
 import { detectLanguage, extractCodemap, formatCodemapCompact } from '../codemap/index.js';
+import { expandKeywords } from '../expand.js';
+import { buildImportGraph, bfsWalk } from '../graph/index.js';
 import type {
   SliceAlternate,
   SliceCandidate,
@@ -31,8 +33,8 @@ const DEFAULT_WARNING = 0.75;
 
 const DEFAULT_STRATEGIES: Record<SliceIntensity, SliceStrategy[]> = {
   lite: ['inventory', 'skeleton', 'keyword', 'config'],
-  standard: ['inventory', 'skeleton', 'keyword', 'symbols', 'config', 'diff'],
-  deep: ['inventory', 'skeleton', 'keyword', 'symbols', 'config', 'diff', 'ast', 'complexity', 'docs'],
+  standard: ['inventory', 'skeleton', 'keyword', 'symbols', 'config', 'diff', 'graph'],
+  deep: ['inventory', 'skeleton', 'keyword', 'symbols', 'config', 'diff', 'graph', 'ast', 'complexity', 'docs'],
 };
 
 const DEFAULT_INTENSITY: SliceIntensity = 'deep';
@@ -41,6 +43,7 @@ const DEFAULT_INTENSITY: SliceIntensity = 'deep';
 const STRATEGY_BUDGET_CAPS: Partial<Record<SliceStrategy, number>> = {
   keyword: 0.20,  // Max 20% of budget for keyword matches
   diff: 0.10,     // Max 10% for recent changes
+  graph: 0.15,    // Max 15% for import graph
   docs: 0.10,     // Max 10% for docs
 };
 
@@ -49,6 +52,7 @@ const STRATEGY_WEIGHTS: Record<SliceStrategy, number> = {
   skeleton: 0.90,  // High priority - structural overview
   keyword: 0.65,   // Reduced - often matches docs more than code
   symbols: 0.55,
+  graph: 0.50,     // Between symbols and config
   config: 0.45,
   diff: 0.6,
   inventory: 0.2,
@@ -113,19 +117,29 @@ const CONFIG_FILES = [
   'tsup.config.ts',
   'rollup.config.js',
   '.env.example',
+  'pyproject.toml',
+  'setup.py',
+  'setup.cfg',
+  'requirements.txt',
+  'go.mod',
+  'go.sum',
+  'Cargo.toml',
+  'Makefile',
 ];
 
-const CODE_EXTENSIONS = ['.ts', '.tsx', '.js', '.jsx', '.rs'];
+const CODE_EXTENSIONS = ['.ts', '.tsx', '.js', '.jsx', '.rs', '.py', '.go'];
 
 // Skeleton strategy: entry points and structural files
 const SKELETON_PATTERNS = [
   // Entry points
   'cli.ts', 'cli.js', 'main.ts', 'main.js', 'mod.ts', 'mod.rs',
   'index.ts', 'index.js', 'lib.rs',
+  'main.go', '__init__.py', '__main__.py',
   // Type definitions
   'types.ts', 'types.js', 'interfaces.ts',
   // Core modules (commonly named)
   'app.ts', 'app.js', 'server.ts', 'server.js',
+  'app.py', 'setup.py',
 ];
 
 // Directories to prioritize for skeleton (src/, lib/, packages/*/src/)
@@ -591,7 +605,11 @@ export class SlicerEngine {
     const candidates: SliceCandidate[] = [];
     const matchedFiles = new Set<string>();
     const explicitPaths = await extractExplicitPaths(request.task, request.repoRoot);
-    const baseKeywords = extractKeywords(request.task, 12);
+    const rawKeywords = extractKeywords(request.task, 12);
+    const baseKeywords = await expandKeywords(rawKeywords, {
+      maxKeywords: 20,
+      repoRoot: request.repoRoot,
+    });
 
     if (explicitPaths.length > 0) {
       for (const path of explicitPaths) {
@@ -684,7 +702,7 @@ export class SlicerEngine {
 
     if (strategies.includes('keyword')) {
       const keywordIntensity = resolveIntensity('keyword', request, intensity);
-      const keywordLimit = keywordIntensity === 'lite' ? 4 : keywordIntensity === 'deep' ? 10 : 6;
+      const keywordLimit = keywordIntensity === 'lite' ? 6 : keywordIntensity === 'deep' ? 14 : 8;
       const keywords = baseKeywords.slice(0, keywordLimit);
       const contextLines = keywordIntensity === 'lite' ? 1 : keywordIntensity === 'deep' ? 4 : 2;
       const maxResults = keywordIntensity === 'lite' ? 40 : keywordIntensity === 'deep' ? 120 : 80;
@@ -729,7 +747,7 @@ export class SlicerEngine {
     if (strategies.includes('ast')) {
       const astIntensity = resolveIntensity('ast', request, intensity);
       const astLimit = astIntensity === 'lite' ? 6 : astIntensity === 'deep' ? 24 : 12;
-      const keywords = baseKeywords.slice(0, 8);
+      const keywords = baseKeywords.slice(0, 10);
 
       if (keywords.length === 0) {
         warnings.push('AST strategy skipped: no usable keywords found.');
@@ -958,6 +976,79 @@ export class SlicerEngine {
       }
     }
 
+    if (strategies.includes('graph')) {
+      const graphIntensity = resolveIntensity('graph', request, intensity);
+      const maxGraphFiles = graphIntensity === 'lite' ? 6 : graphIntensity === 'deep' ? 20 : 12;
+      const graphDepth = graphIntensity === 'lite' ? 1 : graphIntensity === 'deep' ? 3 : 2;
+      const seedFiles = Array.from(matchedFiles);
+
+      if (seedFiles.length === 0) {
+        warnings.push('Graph strategy skipped: no seed files from prior strategies.');
+      } else {
+        const codeFiles = (await listRepoFiles(request.repoRoot)).filter(isCodePath);
+
+        // Performance guard: limit to adjacent directories for large repos
+        let filesToAnalyze = codeFiles;
+        if (codeFiles.length > 500) {
+          const seedDirs = new Set(seedFiles.map((f) => f.split('/').slice(0, -1).join('/')));
+          const adjacentDirs = new Set<string>();
+          for (const dir of seedDirs) {
+            adjacentDirs.add(dir);
+            const parent = dir.split('/').slice(0, -1).join('/');
+            if (parent) adjacentDirs.add(parent);
+          }
+          filesToAnalyze = codeFiles.filter((f) => {
+            const dir = f.split('/').slice(0, -1).join('/');
+            return adjacentDirs.has(dir);
+          });
+        }
+
+        // Build codemaps for files to analyze
+        const structure = await this.backend.getStructure(filesToAnalyze, { scope: 'paths' });
+
+        // Build the import graph
+        const graph = buildImportGraph(structure.codemaps, request.repoRoot);
+
+        // BFS from seed files
+        const discovered = bfsWalk(graph, seedFiles, graphDepth);
+
+        // Create candidates for newly discovered files
+        let graphCount = 0;
+        for (const [path, depth] of discovered) {
+          if (depth === 0) continue; // Skip seeds themselves
+          if (matchedFiles.has(path)) continue;
+          if (!isPathIncluded(path, request)) continue;
+          if (graphCount >= maxGraphFiles) break;
+
+          const fullPath = join(request.repoRoot, path);
+          const language = detectLanguage(path);
+          if (!language) continue;
+
+          const codemap = await extractCodemap(fullPath);
+          if (!codemap) continue;
+          const compact = formatCodemapCompact(codemap);
+          const tokens = estimateTokens(compact);
+          const depthPenalty = depth * 0.08;
+          const score = Math.max(0.05, (STRATEGY_WEIGHTS['graph'] ?? 0.50) - depthPenalty);
+
+          candidates.push({
+            id: `graph:${path}`,
+            path,
+            strategy: 'graph',
+            representation: 'codemap',
+            score,
+            tokens,
+            reason: `Import graph: depth ${depth} from keyword matches`,
+            source: 'import graph',
+            codemap: compact,
+            alternates: [makeReferenceAlternate(path, 'graph reference')],
+          });
+          matchedFiles.add(path);
+          graphCount++;
+        }
+      }
+    }
+
     if (strategies.includes('complexity')) {
       const complexityIntensity = resolveIntensity('complexity', request, intensity);
       const limit = complexityIntensity === 'lite' ? 10 : complexityIntensity === 'deep' ? 40 : 20;
@@ -1114,6 +1205,8 @@ export class SlicerEngine {
       content: candidate.representation === 'codemap' ? undefined : candidate.content,
       codemap: candidate.representation === 'codemap' ? candidate.codemap : undefined,
       relevance: Number(candidate.score.toFixed(2)),
+      reason: candidate.reason,
+      strategy: candidate.strategy,
     }));
 
     // Build strategy stats from selected candidates

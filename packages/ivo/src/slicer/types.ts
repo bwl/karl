@@ -10,6 +10,7 @@ export type SliceStrategy =
   | 'ast'
   | 'config'
   | 'diff'
+  | 'graph'
   | 'complexity'
   | 'docs'
   | 'explicit';

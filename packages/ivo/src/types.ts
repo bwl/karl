@@ -173,6 +173,8 @@ export interface ContextFile {
   content?: string;
   codemap?: string;
   relevance?: number;
+  reason?: string;
+  strategy?: string;
 }
 
 export interface StrategyStats {

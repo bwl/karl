@@ -9,6 +9,7 @@ const AVAILABLE_STRATEGIES: SliceStrategy[] = [
   'symbols',
   'config',
   'diff',
+  'graph',
   'ast',
   'complexity',
   'docs',
