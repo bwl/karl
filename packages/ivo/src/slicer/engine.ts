@@ -926,28 +926,51 @@ export class SlicerEngine {
 
         let representation: SliceCandidate['representation'] = 'full';
         let body = content;
+        let codemapStr: string | undefined;
         if (tokens > maxDocTokens) {
-          const lines = content.split('\n');
-          body = lines.slice(0, 200).join('\n');
-          representation = 'snippet';
+          // Try codemap for markdown files before falling back to truncation
+          if (detectLanguage(path) === 'markdown') {
+            const codemap = await extractCodemap(fullPath, content);
+            if (codemap) {
+              body = formatCodemapCompact(codemap);
+              representation = 'codemap';
+              codemapStr = body;
+            }
+          }
+          if (representation !== 'codemap') {
+            const lines = content.split('\n');
+            body = lines.slice(0, 200).join('\n');
+            representation = 'snippet';
+          }
+        } else if (detectLanguage(path) === 'markdown') {
+          // For small markdown files included in full, generate a codemap alternate
+          const codemap = await extractCodemap(fullPath, content);
+          if (codemap) {
+            codemapStr = formatCodemapCompact(codemap);
+          }
         }
 
         const alternates: SliceAlternate[] = [makeReferenceAlternate(path, 'docs reference')];
+        if (codemapStr && representation !== 'codemap') {
+          alternates.unshift({ representation: 'codemap', tokens: estimateTokens(codemapStr), codemap: codemapStr });
+        }
         if (representation !== 'full' && tokens <= maxDocTokens * 2) {
           alternates.unshift({ representation: 'full', tokens, content });
         }
 
-        const score = scoreCandidate('docs', matches?.length ?? 1, estimateTokens(body), budgetTokens);
+        const bodyTokens = estimateTokens(body);
+        const score = scoreCandidate('docs', matches?.length ?? 1, bodyTokens, budgetTokens);
         candidates.push({
           id: `docs:${path}`,
           path,
           strategy: 'docs',
           representation,
           score,
-          tokens: estimateTokens(body),
+          tokens: bodyTokens,
           reason,
           source: 'docs',
-          content: body,
+          content: representation === 'codemap' ? undefined : body,
+          codemap: representation === 'codemap' ? codemapStr : undefined,
           alternates,
         });
       };

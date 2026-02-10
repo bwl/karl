@@ -70,6 +70,17 @@ export interface CodeMap {
   functions: FunctionInfo[];
   types: TypeInfo[];
   dependencies: string[];
+  /** Heading hierarchy (markdown only) */
+  sections?: SectionInfo[];
+  /** Frontmatter key names (markdown only) */
+  frontmatter?: string[];
+  /** Code block inventory (markdown only) */
+  codeBlocks?: { count: number; languages: string[] };
+}
+
+export interface SectionInfo {
+  depth: number;  // 1-6 (h1-h6)
+  title: string;
 }
 
 export interface ClassInfo {

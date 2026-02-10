@@ -60,6 +60,26 @@ export function registerStructureCommand(program: Command, getBackend: () => Pro
             console.log(`Language: ${codemap.language}`);
             console.log('='.repeat(60));
 
+            if (codemap.language === 'markdown') {
+              // Markdown-specific rendering
+              if (codemap.sections && codemap.sections.length > 0) {
+                console.log('\nSections:');
+                for (const s of codemap.sections) {
+                  console.log(`${'  '.repeat(s.depth)}${'#'.repeat(s.depth)} ${s.title}`);
+                }
+              }
+              if (codemap.frontmatter && codemap.frontmatter.length > 0) {
+                console.log(`\nFront-matter: ${codemap.frontmatter.join(', ')}`);
+              }
+              if (codemap.codeBlocks) {
+                const langs = codemap.codeBlocks.languages.length > 0
+                  ? ` (${codemap.codeBlocks.languages.join(', ')})`
+                  : '';
+                console.log(`Code blocks: ${codemap.codeBlocks.count}${langs}`);
+              }
+              continue;
+            }
+
             if (codemap.exports.length > 0) {
               console.log(`\nExports: ${codemap.exports.join(', ')}`);
             }

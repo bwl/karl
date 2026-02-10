@@ -6,8 +6,9 @@
  */
 
 import { readFile } from 'fs/promises';
+import { spawn } from 'child_process';
 import Parser from 'tree-sitter';
-import type { CodeMap, ClassInfo, FunctionInfo, TypeInfo } from '../types.js';
+import type { CodeMap, ClassInfo, FunctionInfo, TypeInfo, SectionInfo } from '../types.js';
 import { getParser, detectLanguage, loadLanguage, type SupportedLanguage, type SyntaxNode, type Tree } from './parser.js';
 import { getQueryForLanguage } from './queries.js';
 
@@ -37,6 +38,11 @@ export async function extractCodemap(filePath: string, content?: string): Promis
     return null;
   }
 
+  // Markdown uses mq instead of tree-sitter
+  if (language === 'markdown') {
+    return extractMarkdownCodemap(filePath, content);
+  }
+
   // Read content if not provided
   const source = content ?? (await readFile(filePath, 'utf-8'));
 
@@ -51,6 +57,134 @@ export async function extractCodemap(filePath: string, content?: string): Promis
 
   // Build the codemap
   return buildCodemap(filePath, language, items, source);
+}
+
+// ============================================================================
+// Markdown codemap via mq
+// ============================================================================
+
+/** Cache whether mq is available on PATH (null = not checked yet) */
+let mqAvailable: boolean | null = null;
+
+function runMq(args: string[]): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const proc = spawn('mq', args, { stdio: ['pipe', 'pipe', 'pipe'] });
+    let stdout = '';
+    let stderr = '';
+    proc.stdout?.on('data', (d: Buffer) => (stdout += d.toString()));
+    proc.stderr?.on('data', (d: Buffer) => (stderr += d.toString()));
+    proc.on('close', (code) => {
+      if (code === 0) resolve(stdout);
+      else reject(new Error(stderr || `mq exited with code ${code}`));
+    });
+    proc.on('error', reject);
+  });
+}
+
+async function isMqAvailable(): Promise<boolean> {
+  if (mqAvailable !== null) return mqAvailable;
+  try {
+    await runMq(['--version']);
+    mqAvailable = true;
+  } catch {
+    mqAvailable = false;
+  }
+  return mqAvailable;
+}
+
+interface MqHeading {
+  type: 'Heading';
+  depth: number;
+  values: Array<{ type: string; value?: string }>;
+}
+
+interface MqCode {
+  type: 'Code';
+  value: string;
+  lang: string | null;
+}
+
+interface MqYaml {
+  type: 'Yaml';
+  value: string;
+}
+
+/**
+ * Extract codemap from a markdown file using mq
+ */
+async function extractMarkdownCodemap(filePath: string, _content?: string): Promise<CodeMap | null> {
+  if (!(await isMqAvailable())) return null;
+
+  try {
+    // Run 3 mq queries in parallel
+    const [headingsRaw, frontmatterRaw, codeBlocksRaw] = await Promise.all([
+      runMq(['select(is_h(.))', filePath, '-F', 'json']).catch(() => '[]'),
+      runMq(['select(is_yaml(.))', filePath, '-F', 'json']).catch(() => '[]'),
+      runMq(['select(is_code(.))', filePath, '-F', 'json']).catch(() => '[]'),
+    ]);
+
+    // Parse headings
+    const sections: SectionInfo[] = [];
+    try {
+      const headings: unknown[] = JSON.parse(headingsRaw);
+      for (const h of headings) {
+        const heading = h as MqHeading;
+        if (heading.type !== 'Heading') continue;
+        const title = heading.values
+          ?.filter((v) => v.value)
+          .map((v) => v.value)
+          .join('') ?? '';
+        if (title) {
+          sections.push({ depth: heading.depth, title });
+        }
+      }
+    } catch { /* malformed JSON — skip headings */ }
+
+    // Parse frontmatter
+    const frontmatter: string[] = [];
+    try {
+      const yamls: unknown[] = JSON.parse(frontmatterRaw);
+      for (const y of yamls) {
+        const yaml = y as MqYaml;
+        if (yaml.type !== 'Yaml' || !yaml.value) continue;
+        const keys = yaml.value
+          .split('\n')
+          .map((line) => line.match(/^([a-zA-Z_][\w-]*):/)?.[1])
+          .filter(Boolean) as string[];
+        frontmatter.push(...keys);
+      }
+    } catch { /* malformed JSON — skip frontmatter */ }
+
+    // Parse code blocks
+    let codeBlockCount = 0;
+    const codeBlockLangs = new Set<string>();
+    try {
+      const blocks: unknown[] = JSON.parse(codeBlocksRaw);
+      for (const b of blocks) {
+        const block = b as MqCode;
+        if (block.type !== 'Code') continue;
+        codeBlockCount++;
+        if (block.lang) codeBlockLangs.add(block.lang);
+      }
+    } catch { /* malformed JSON — skip code blocks */ }
+
+    return {
+      path: filePath,
+      language: 'markdown',
+      exports: [],
+      classes: [],
+      functions: [],
+      types: [],
+      dependencies: [],
+      sections,
+      frontmatter: frontmatter.length > 0 ? frontmatter : undefined,
+      codeBlocks: codeBlockCount > 0
+        ? { count: codeBlockCount, languages: [...codeBlockLangs] }
+        : undefined,
+    };
+  } catch {
+    return null;
+  }
 }
 
 /**
@@ -446,6 +580,26 @@ export function formatCodemapCompact(codemap: CodeMap): string {
 
   lines.push(`File: ${codemap.path}`);
   lines.push(`Language: ${codemap.language}`);
+
+  // Markdown-specific rendering
+  if (codemap.language === 'markdown') {
+    if (codemap.sections && codemap.sections.length > 0) {
+      lines.push('Sections:');
+      for (const s of codemap.sections) {
+        lines.push(`${'  '.repeat(s.depth)}${'#'.repeat(s.depth)} ${s.title}`);
+      }
+    }
+    if (codemap.frontmatter && codemap.frontmatter.length > 0) {
+      lines.push(`Front-matter: ${codemap.frontmatter.join(', ')}`);
+    }
+    if (codemap.codeBlocks) {
+      const langs = codemap.codeBlocks.languages.length > 0
+        ? ` (${codemap.codeBlocks.languages.join(', ')})`
+        : '';
+      lines.push(`Code blocks: ${codemap.codeBlocks.count}${langs}`);
+    }
+    return lines.join('\n');
+  }
 
   if (codemap.dependencies.length > 0) {
     lines.push(`Imports: ${codemap.dependencies.join(', ')}`);

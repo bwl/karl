@@ -109,6 +109,9 @@ export function formatStructureJson(result: StructureResult, pretty: boolean = t
       functions: cm.functions,
       types: cm.types,
       dependencies: cm.dependencies,
+      sections: cm.sections,
+      frontmatter: cm.frontmatter,
+      codeBlocks: cm.codeBlocks,
     })),
   };
 

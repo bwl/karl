@@ -15,7 +15,8 @@ export type SupportedLanguage =
   | 'javascript'
   | 'rust'
   | 'python'
-  | 'go';
+  | 'go'
+  | 'markdown';
 
 // Map of language to loaded grammar
 const loadedLanguages: Map<SupportedLanguage, unknown> = new Map();
@@ -34,6 +35,7 @@ const EXTENSION_LANGUAGE_MAP: Record<string, SupportedLanguage> = {
   '.rs': 'rust',
   '.py': 'python',
   '.go': 'go',
+  '.md': 'markdown',
 };
 
 /**
@@ -119,14 +121,14 @@ export function detectLanguage(filePath: string): SupportedLanguage | null {
  * Check if a language is supported
  */
 export function isLanguageSupported(lang: string): lang is SupportedLanguage {
-  return ['typescript', 'tsx', 'javascript', 'rust', 'python', 'go'].includes(lang);
+  return ['typescript', 'tsx', 'javascript', 'rust', 'python', 'go', 'markdown'].includes(lang);
 }
 
 /**
  * Get list of supported languages
  */
 export function getSupportedLanguages(): SupportedLanguage[] {
-  return ['typescript', 'tsx', 'javascript', 'rust', 'python', 'go'];
+  return ['typescript', 'tsx', 'javascript', 'rust', 'python', 'go', 'markdown'];
 }
 
 /**
