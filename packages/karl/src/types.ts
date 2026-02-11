@@ -100,6 +100,7 @@ export interface StackConfig {
   contextFile?: string;       // Path to context file
   unrestricted?: boolean;     // Bypass guardrails
   tools?: string[];           // Limit tools to these (e.g., ["read", "bash"])
+  noTools?: boolean;          // Disable all tool use
   thinking?: ThinkingConfig;  // Extended thinking (Anthropic only)
   cacheControl?: boolean;     // Enable prompt caching (Anthropic only)
 }

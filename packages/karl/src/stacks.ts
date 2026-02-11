@@ -193,6 +193,7 @@ export class StackManager {
       temperature: stack.temperature,
       maxTokens: stack.maxTokens,
       tools: stack.tools,
+      noTools: stack.noTools,
       thinking: stack.thinking,
       cacheControl: stack.cacheControl,
       // CLI options override
