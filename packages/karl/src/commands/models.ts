@@ -738,6 +738,11 @@ export async function handleModelsCommand(args: string[]) {
         const parts = rest[1].split('/');
         provider = parts[0];
         model = parts.slice(1).join('/');  // Handle models like openai/gpt-4o or org/model:tag
+        // OpenRouter model IDs are namespaced; preserve shorthand like
+        // "openrouter/aurora-alpha" as "openrouter/aurora-alpha".
+        if (provider === 'openrouter' && model && !model.includes('/')) {
+          model = `${provider}/${model}`;
+        }
       } else {
         // Parse flags
         for (let i = 1; i < rest.length; i++) {

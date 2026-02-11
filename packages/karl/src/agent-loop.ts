@@ -406,9 +406,9 @@ async function* streamOpenAI(
 
       for (const line of lines) {
         const trimmed = line.trim();
-        if (!trimmed || !trimmed.startsWith('data: ')) continue;
+        if (!trimmed || !trimmed.startsWith('data:')) continue;
 
-        const data = trimmed.slice(6);
+        const data = trimmed.startsWith('data: ') ? trimmed.slice(6) : trimmed.slice(5);
         if (data === '[DONE]') continue;
 
         try {
