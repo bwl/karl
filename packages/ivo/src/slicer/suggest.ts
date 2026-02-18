@@ -1,6 +1,5 @@
-import { completeSimple, getModel, setApiKey } from '@mariozechner/pi-ai';
-import type { AssistantMessage, Model } from '@mariozechner/pi-ai';
-import { loadKarlContext, type ProviderConfig, type ResolvedModel } from '../karl/bridge.js';
+import { resolveLlmConfig, chatComplete } from '../llm.js';
+import { loadConfig } from '../config.js';
 import type { SliceIntensity, SlicePlan, SliceRequest, SliceStrategy, SliceStrategyCaps } from './types.js';
 
 const AVAILABLE_STRATEGIES: SliceStrategy[] = [
@@ -33,7 +32,6 @@ export interface SuggestBucketOptions {
 export interface SuggestBucketResult {
   update: BucketSuggestionUpdate;
   note?: string;
-  stackName: string;
   raw: string;
 }
 
@@ -50,36 +48,22 @@ export async function suggestBucketConfig(
   }
 
   const cwd = request.repoRoot || process.cwd();
-  const { stackName, stackOptions, systemPrompt, resolvedModel, apiKey } = await loadKarlContext(cwd);
-  const prompt = buildSuggestionPrompt(request, options, {
-    stackName,
-    systemPrompt,
+  const config = await loadConfig(cwd);
+  const llm = resolveLlmConfig(config);
+  if (!llm) {
+    throw new Error('No LLM configured. Run `ivo setup` or set IVO_LLM_ENDPOINT.');
+  }
+
+  const prompt = buildSuggestionPrompt(request, options);
+
+  const raw = await chatComplete(llm, [
+    { role: 'system', content: SUGGESTION_SYSTEM_PROMPT },
+    { role: 'user', content: prompt },
+  ], {
+    temperature: 0.2,
+    maxTokens: options.maxTokens ?? DEFAULT_SUGGEST_TOKENS,
   });
 
-  const model = buildModel(
-    resolvedModel.model,
-    resolvedModel.providerKey,
-    resolvedModel.providerConfig,
-    apiKey,
-    resolvedModel.maxTokens,
-    resolvedModel.contextLength
-  );
-
-  const response = await completeSimple(model, {
-    systemPrompt: SUGGESTION_SYSTEM_PROMPT,
-    messages: [
-      {
-        role: 'user',
-        content: prompt,
-        timestamp: Date.now(),
-      },
-    ],
-  }, {
-    temperature: stackOptions.temperature ?? 0.2,
-    maxTokens: options.maxTokens ?? stackOptions.maxTokens ?? DEFAULT_SUGGEST_TOKENS,
-  });
-
-  const raw = extractAssistantText(response);
   const parsed = parseSuggestionJson(raw);
   const update = normalizeSuggestion(parsed, options.strategiesLocked ?? false);
   const note = typeof parsed?.note === 'string' ? parsed.note.trim() : undefined;
@@ -88,63 +72,13 @@ export async function suggestBucketConfig(
     throw new Error('Suggestion returned no usable settings.');
   }
 
-  return {
-    update,
-    note,
-    stackName,
-    raw,
-  };
-}
-
-type BuildModelInput = Pick<ResolvedModel, 'model' | 'providerKey' | 'providerConfig' | 'maxTokens' | 'contextLength'>;
-
-function mapToPiAiProvider(providerKey: string): string {
-  const mapping: Record<string, string> = {
-    'claude-pro-max': 'anthropic',
-  };
-  return mapping[providerKey] ?? providerKey;
-}
-
-function buildModel(
-  modelId: BuildModelInput['model'],
-  providerKey: BuildModelInput['providerKey'],
-  providerConfig: ProviderConfig,
-  apiKey: string,
-  maxTokens?: BuildModelInput['maxTokens'],
-  contextLength?: BuildModelInput['contextLength']
-): Model<any> {
-  const piProvider = mapToPiAiProvider(providerKey);
-  setApiKey(piProvider, apiKey);
-  const baseModel = getModel(piProvider as any, modelId as any);
-  const api = baseModel?.api ?? (piProvider === 'anthropic' ? 'anthropic-messages' : 'openai-completions');
-  const baseUrl = baseModel?.baseUrl ?? (providerConfig.baseUrl as string | undefined);
-
-  if (!baseUrl) {
-    throw new Error(`Provider "${providerKey}" is missing a baseUrl for LLM suggestions.`);
-  }
-
-  return {
-    id: baseModel?.id ?? modelId,
-    name: baseModel?.name ?? modelId,
-    api,
-    provider: baseModel?.provider ?? piProvider,
-    baseUrl,
-    reasoning: baseModel?.reasoning ?? false,
-    input: baseModel?.input ?? ['text'],
-    cost: baseModel?.cost ?? { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-    contextWindow: baseModel?.contextWindow ?? contextLength ?? 128000,
-    maxTokens: baseModel?.maxTokens ?? maxTokens ?? 8192,
-    headers: baseModel?.headers,
-    compat: baseModel?.compat,
-  };
+  return { update, note, raw };
 }
 
 function buildSuggestionPrompt(
   request: SliceRequest,
-  options: SuggestBucketOptions,
-  ctx: { stackName: string; systemPrompt: string }
+  options: SuggestBucketOptions
 ): string {
-  const trimmedPrompt = ctx.systemPrompt ? truncate(ctx.systemPrompt, MAX_SYSTEM_PROMPT_CHARS) : '';
   const current = {
     budgetTokens: request.budgetTokens,
     intensity: request.intensity ?? 'standard',
@@ -167,9 +101,7 @@ function buildSuggestionPrompt(
     : undefined;
 
   const payload = {
-    karlStack: ctx.stackName,
-    karlSystemPrompt: trimmedPrompt,
-    karlTask: request.task,
+    task: request.task,
     currentConfig: current,
     planSummary,
     constraints: {
@@ -180,7 +112,7 @@ function buildSuggestionPrompt(
   };
 
   return [
-    'Given the Karl request and the current Ivo bucket config, return JSON with suggested settings.',
+    'Given the task and the current Ivo bucket config, return JSON with suggested settings.',
     'Only include fields you want to change.',
     'Allowed fields: intensity, strategies, strategyIntensity, strategyCaps, includeTree, includePreviousResponse, include, exclude, note.',
     'Use arrays for strategies/include/exclude. Use strategyCaps as { strategy: { maxItems, maxTokens } }.',
@@ -188,21 +120,6 @@ function buildSuggestionPrompt(
     '',
     JSON.stringify(payload, null, 2),
   ].join('\n');
-}
-
-function truncate(value: string, max: number): string {
-  if (value.length <= max) return value;
-  return `${value.slice(0, max - 3)}...`;
-}
-
-function extractAssistantText(message: AssistantMessage): string {
-  const parts: string[] = [];
-  for (const block of message.content || []) {
-    if (block.type === 'text') {
-      parts.push(block.text);
-    }
-  }
-  return parts.join('\n').trim();
 }
 
 function parseSuggestionJson(raw: string): Record<string, unknown> {

@@ -12,6 +12,7 @@ import { formatContext } from '../output/index.js';
 import { saveContext } from '../context-store.js';
 import { loadConfig } from '../config.js';
 import { getUsageHint, getExampleHints } from '../hints.js';
+import { operatorContext } from '../operator.js';
 
 export function registerContextCommand(program: Command, getBackend: () => Promise<IvoBackend>): void {
   program
@@ -22,6 +23,7 @@ export function registerContextCommand(program: Command, getBackend: () => Promi
     .option('-f, --format <format>', 'Output format: xml, markdown, or json')
     .option('--full', 'Output full context instead of summary + ID')
     .option('--snapshot', 'Get current context snapshot (no keyword search)')
+    .option('--operator', 'Use grok-fast operator for smart context assembly')
     .addHelpText(
       'after',
       `
@@ -41,7 +43,6 @@ Examples:
 
   # Use the context ID with your agent
   ivo get a7b2c3d | claude -p "fix the auth bug"
-  karl run "fix the auth bug" --context a7b2c3d
   ivo get a7b2c3d | codex exec -
   ivo get a7b2c3d | pbcopy
 
@@ -81,6 +82,11 @@ Examples:
           if (task) {
             result.task = task;
           }
+        } else if (options.operator) {
+          // Smart operator loop: expand → build → evaluate → retry
+          const repoRoot = process.cwd();
+          const opResult = await operatorContext(task, backend, contextOpts, repoRoot);
+          result = opResult.result;
         } else {
           // Build context by searching for keywords
           console.error(`Searching: ${task}`);

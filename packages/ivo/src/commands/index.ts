@@ -15,6 +15,8 @@ export { registerGetCommand } from './get.js';
 export { registerRecipeCommand } from './recipe.js';
 export { registerPinCommand } from './pin.js';
 export { registerSetupCommand } from './setup.js';
+export { registerIndexCommand } from './index-cmd.js';
+export { registerMapCommand } from './map.js';
 
 import { registerTreeCommand } from './tree.js';
 import { registerSearchCommand } from './search.js';
@@ -26,6 +28,8 @@ import { registerGetCommand } from './get.js';
 import { registerRecipeCommand } from './recipe.js';
 import { registerPinCommand } from './pin.js';
 import { registerSetupCommand } from './setup.js';
+import { registerIndexCommand } from './index-cmd.js';
+import { registerMapCommand } from './map.js';
 
 /**
  * Register all commands
@@ -41,4 +45,6 @@ export function registerCommands(program: Command, getBackend: () => Promise<Ivo
   registerRecipeCommand(program, getBackend);
   registerPinCommand(program);
   registerSetupCommand(program);
+  registerIndexCommand(program, getBackend);
+  registerMapCommand(program);
 }

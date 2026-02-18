@@ -5,8 +5,6 @@
 const HINTS = [
   // Claude Code — pipe context as stdin with -p (print/non-interactive mode)
   { example: 'ivo get {id} | claude -p "your task"', label: 'Claude Code' },
-  // Karl — native --context flag
-  { example: 'karl run "your task" --context {id}', label: 'Karl' },
   // Codex — pipe prompt via stdin to exec subcommand
   { example: 'ivo get {id} | codex exec -', label: 'Codex' },
   // OpenCode — pipe context to run subcommand

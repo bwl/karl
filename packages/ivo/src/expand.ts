@@ -4,7 +4,7 @@
 
 import { readFile, writeFile, mkdir } from 'fs/promises';
 import { join, dirname } from 'path';
-import { loadConfig } from './config.js';
+import { loadLlmConfig, chatComplete } from './llm.js';
 
 const SYNONYM_MAP: Record<string, string[]> = {
   auth: ['login', 'logout', 'session', 'jwt', 'token', 'oauth', 'credentials', 'password'],
@@ -57,42 +57,17 @@ export function expandStatic(keywords: string[]): string[] {
 }
 
 export async function expandWithLlm(keywords: string[]): Promise<string[]> {
-  const config = await loadConfig();
-  const endpoint = process.env.IVO_LLM_ENDPOINT ?? config.llm?.endpoint;
-  if (!endpoint) return [];
-
-  const model = process.env.IVO_LLM_MODEL ?? config.llm?.model ?? 'deepseek/deepseek-chat-v3-0324:free';
-  const apiKey = process.env.IVO_LLM_API_KEY ?? config.llm?.apiKey ?? '';
+  const llm = await loadLlmConfig();
+  if (!llm) return [];
 
   const prompt = `Given these code search keywords: ${JSON.stringify(keywords)}
 Return a JSON array of 5-10 related programming terms/identifiers that would help find relevant source code files. Only return the JSON array, no explanation.`;
 
   try {
-    const baseUrl = endpoint.replace(/\/+$/, '');
-    const url = `${baseUrl}/v1/chat/completions`;
-    const headers: Record<string, string> = { 'Content-Type': 'application/json' };
-    if (apiKey) {
-      headers['Authorization'] = `Bearer ${apiKey}`;
-    }
+    const content = await chatComplete(llm, [
+      { role: 'user', content: prompt },
+    ], { temperature: 0.3, maxTokens: 200, timeoutMs: 5000 });
 
-    const response = await fetch(url, {
-      method: 'POST',
-      headers,
-      body: JSON.stringify({
-        model,
-        messages: [{ role: 'user', content: prompt }],
-        temperature: 0.3,
-        max_tokens: 200,
-      }),
-      signal: AbortSignal.timeout(5000),
-    });
-
-    if (!response.ok) return [];
-
-    const data = (await response.json()) as {
-      choices?: Array<{ message?: { content?: string } }>;
-    };
-    const content = data.choices?.[0]?.message?.content ?? '';
     return parseLlmSynonyms(content);
   } catch {
     return [];
@@ -102,7 +77,6 @@ Return a JSON array of 5-10 related programming terms/identifiers that would hel
 export function parseLlmSynonyms(content: string): string[] {
   if (!content) return [];
 
-  // Try to extract a JSON array from the response
   const arrayMatch = content.match(/\[[\s\S]*?\]/);
   if (!arrayMatch) return [];
 
@@ -138,7 +112,7 @@ async function saveCache(repoRoot: string, cache: SynonymCache): Promise<void> {
     await mkdir(dirname(cachePath), { recursive: true });
     await writeFile(cachePath, JSON.stringify(cache, null, 2));
   } catch {
-    // Best effort — don't fail the main operation
+    // Best effort
   }
 }
 
@@ -156,15 +130,13 @@ export async function expandKeywords(
   const expanded = expandStatic(keywords);
 
   // Try LLM expansion if configured
-  const config = await loadConfig();
-  const endpoint = process.env.IVO_LLM_ENDPOINT ?? config.llm?.endpoint;
-  if (endpoint && options.useLlm !== false) {
+  const llm = await loadLlmConfig();
+  if (llm && options.useLlm !== false) {
     const repoRoot = options.repoRoot ?? process.cwd();
     const key = cacheKey(keywords);
     const cache = await loadCache(repoRoot);
 
     if (cache[key]) {
-      // Cache hit
       for (const term of cache[key]) {
         expanded.push(term);
       }

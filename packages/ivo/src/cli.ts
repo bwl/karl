@@ -6,12 +6,25 @@
  * Ivo prepares optimal context before your AI code agent serves.
  */
 
+import { join } from 'path';
+import { homedir } from 'os';
 import { Command } from 'commander';
 import { registerCommands } from './commands/index.js';
 import { NativeBackend } from './backends/native.js';
 import type { IvoBackend } from './backends/types.js';
+import { registerBuiltinStrategies } from './slicer/strategies/index.js';
+import { loadExternalStrategies } from './slicer/registry.js';
 
 const VERSION = '0.1.0';
+
+// Register built-in strategies
+registerBuiltinStrategies();
+
+// Load external strategy plugins
+await loadExternalStrategies([
+  join(homedir(), '.config', 'ivo', 'strategies'),
+  join(process.cwd(), '.ivo', 'strategies'),
+]);
 
 // Cached backend instance
 let backendInstance: IvoBackend | undefined;

@@ -2,7 +2,7 @@
  * Context Store
  *
  * Manages context files with git-style IDs.
- * Stores prepared context in .ivo/contexts/ for retrieval by karl.
+ * Stores prepared context in .ivo/contexts/ for retrieval by any agent.
  */
 
 import { createHash } from 'crypto';

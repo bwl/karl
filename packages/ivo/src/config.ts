@@ -17,6 +17,12 @@ export interface IvoConfig {
     intensity?: 'lite' | 'standard' | 'deep';
     format?: 'xml' | 'markdown' | 'json';
   };
+  embeddings?: {
+    provider?: string;   // 'openai' (default) or endpoint URL
+    model?: string;      // default: 'text-embedding-3-small'
+    dimensions?: number; // default: 256
+    apiKey?: string;     // default: falls back to OPENAI_API_KEY env
+  };
 }
 
 export function getGlobalConfigPath(): string {
@@ -44,6 +50,9 @@ function deepMerge(base: IvoConfig, override: IvoConfig): IvoConfig {
   }
   if (override.defaults) {
     result.defaults = { ...base.defaults, ...override.defaults };
+  }
+  if (override.embeddings) {
+    result.embeddings = { ...base.embeddings, ...override.embeddings };
   }
 
   return result;

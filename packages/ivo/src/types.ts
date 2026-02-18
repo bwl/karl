@@ -157,7 +157,7 @@ export interface ContextHistoryEntry {
 }
 
 export interface ContextHistory {
-  source: 'karl';
+  source: string;
   mode: 'summary' | 'full';
   entries: ContextHistoryEntry[];
 }

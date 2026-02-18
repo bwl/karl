@@ -10,7 +10,6 @@ import { formatStructureJson } from '../output/json.js';
 export function registerStructureCommand(program: Command, getBackend: () => Promise<IvoBackend>): void {
   program
     .command('structure [paths...]')
-    .alias('map')
     .description('Get code structure (codemaps) for files or directories')
     .option('-s, --scope <scope>', 'Scope: paths or selected', 'paths')
     .option('-n, --max <n>', 'Maximum codemaps to return', parseInt)

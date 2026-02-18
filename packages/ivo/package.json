@@ -1,7 +1,7 @@
 {
-  "name": "@karl/ivo",
+  "name": "ivo",
   "version": "0.1.0",
-  "description": "Context Intelligence Engine for Karl",
+  "description": "Context Intelligence Engine for AI coding agents",
   "type": "module",
   "main": "./src/index.ts",
   "bin": {
@@ -13,7 +13,6 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
-    "@mariozechner/pi-ai": "^0.27.1",
     "commander": "^12.1.0",
     "tree-sitter": "^0.22.4",
     "tree-sitter-go": "^0.23.4",

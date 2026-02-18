@@ -2,19 +2,14 @@
  * Slicer Types - shared context slicing primitives
  */
 
-export type SliceStrategy =
-  | 'inventory'
-  | 'skeleton'
-  | 'keyword'
-  | 'symbols'
-  | 'ast'
-  | 'config'
-  | 'diff'
-  | 'graph'
-  | 'complexity'
-  | 'docs'
-  | 'forest'
-  | 'explicit';
+/** Strategy name — open string with well-known built-in constants */
+export type SliceStrategy = string;
+
+export const BUILTIN_STRATEGIES = [
+  'inventory', 'skeleton', 'keyword', 'symbols', 'ast',
+  'config', 'diff', 'graph', 'semantic', 'complexity',
+  'docs', 'forest', 'explicit',
+] as const;
 
 export type SliceRepresentation = 'full' | 'snippet' | 'codemap' | 'reference';
 
