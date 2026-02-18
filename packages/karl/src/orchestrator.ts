@@ -99,6 +99,26 @@ You call: karl("run", "Add dark mode support to the application - determine the 
 
 type Emitter = (event: OrchestratorEvent) => void;
 
+/**
+ * Check if ivo CLI is available on PATH.
+ */
+let ivoAvailable: boolean | null = null;
+
+async function isIvoAvailable(): Promise<boolean> {
+  if (ivoAvailable !== null) return ivoAvailable;
+  try {
+    const proc = spawn('ivo', ['--version'], { stdio: 'pipe' });
+    const code = await new Promise<number | null>((resolve) => {
+      proc.on('close', resolve);
+      proc.on('error', () => resolve(null));
+    });
+    ivoAvailable = code === 0;
+  } catch {
+    ivoAvailable = false;
+  }
+  return ivoAvailable;
+}
+
 interface IvoResult {
   contextId: string;
   files: number;
@@ -189,6 +209,14 @@ function createIvoContextTool(emit: Emitter): ToolDefinition {
     },
     execute: async (_toolCallId, params) => {
       const { keywords, budget = 32000 } = params as { keywords: string; budget?: number };
+
+      // Check if ivo is installed
+      if (!await isIvoAvailable()) {
+        return {
+          content: [{ type: 'text', text: 'ivo is not installed. Install it with: bun install -g ivo (or add it to PATH). Proceeding without codebase context.' }],
+          isError: true
+        };
+      }
 
       emit({ type: 'ivo_start', task: keywords });
 
