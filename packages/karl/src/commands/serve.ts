@@ -41,15 +41,7 @@ interface JsonRpcRequest {
  */
 interface JsonRpcResponse {
   jsonrpc: '2.0';
-  result?: {
-    content: string;
-    model: string;
-    usage?: {
-      input: number;
-      output: number;
-    };
-    thinking?: string;
-  };
+  result?: Record<string, unknown>;
   error?: {
     code: number;
     message: string;

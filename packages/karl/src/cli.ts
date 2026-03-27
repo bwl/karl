@@ -57,6 +57,7 @@ const BUILTIN_COMMANDS = new Set([
   'dd',        // Alias for debugdesign
   'completions', // Shell completion scripts
   'serve',     // JSON-RPC server for IPC with other tools
+  'magic',     // Delegate task to magic
 ]);
 
 /**
@@ -241,6 +242,7 @@ Commands:
   previous                  Print last response (aliases: prev, last)
   agent                     Interactive orchestrator (runs karl commands)
   claude                    Launch Claude Code with Karl-only access
+  magic                     Delegate task to magic
 
 Flags:
   --help, -h           Show full help
@@ -300,6 +302,7 @@ Built-in Commands:
   previous                  Print last response (aliases: prev, last)
   agent                     Interactive orchestrator (runs karl commands)
   claude                    Launch Claude Code with Karl-only access
+  magic                     Delegate task to magic
 ${stackVerbs}
 Flags (use with 'run'):
   --model, -m          Model alias or exact model id
@@ -783,6 +786,12 @@ async function main() {
   else if (firstArg === 'serve') {
     const { handleServeCommand } = await import('./commands/serve.js');
     await handleServeCommand();
+    return;
+  }
+  // Handle 'magic' command - delegate to Codex app-server
+  else if (firstArg === 'magic') {
+    const { handleMagicCommand } = await import('./commands/magic.js');
+    await handleMagicCommand(args.slice(1));
     return;
   }
   // ─────────────────────────────────────────────────────────────────────────

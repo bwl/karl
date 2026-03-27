@@ -92,6 +92,26 @@ karl run --model ag-flash "your task"
 curl http://localhost:8317/v1/models | jq '.data[].id'
 ```
 
+## Local Models with LM Studio
+
+LM Studio provides an OpenAI-compatible API for running local models.
+
+**Setup**:
+
+```bash
+# Add the provider (edit baseUrl for LAN: http://192.168.1.159:1234/v1)
+karl providers add lm-studio
+
+# Discover available models
+curl http://192.168.1.159:1234/v1/models | jq '.data[].id'
+
+# Add models
+karl models add <alias> lm-studio/<model-id>
+
+# Use with karl
+karl run --model <alias> "your task"
+```
+
 ## Agent Skills
 
 Karl supports the [Agent Skills](https://agentskills.io) open standard.

@@ -8,7 +8,7 @@
   "scripts": {
     "test": "bun run scripts/test-all.ts",
     "test-skills": "bun run scripts/test-skills.ts",
-    "build": "bun build src/cli.ts --target bun --outfile dist/karl",
+    "build": "bun build src/cli.ts --target bun --outfile dist/karl && cp dist/karl ~/.local/bin/karl",
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {

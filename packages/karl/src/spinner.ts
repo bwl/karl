@@ -167,6 +167,15 @@ export class Spinner {
     this.lines = 1;
   }
 
+  /** Print a persistent line above the spinner (default mode only) */
+  log(text: string): void {
+    if (!this.enabled || this.verbose) return;
+    if (this.mode.spinner === 'none') return;
+    // Clear spinner line, print log, re-render spinner below
+    process.stderr.write(`\r\x1b[2K${text}\n`);
+    this.render();
+  }
+
   stop(finalMessage?: string): void {
     if (!this.enabled) return;
 

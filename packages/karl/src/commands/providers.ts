@@ -62,6 +62,15 @@ const PROVIDER_TEMPLATES: Record<string, {
     },
     description: 'Antigravity local API server (no auth required)',
   },
+  'lm-studio': {
+    type: 'openai',
+    config: {
+      type: 'openai',
+      baseUrl: 'http://localhost:1234/v1',
+      apiKey: 'lm-studio',
+    },
+    description: 'LM Studio local server (OpenAI-compatible)',
+  },
 };
 
 /**
