@@ -6,7 +6,7 @@
 import { existsSync } from 'fs';
 import { join } from 'path';
 import { loadConfig } from '../config.js';
-import { loadOAuthCredentials } from '../oauth.js';
+import { getOAuthStorageKey, getProviderOAuthToken, loadOAuthCredentials } from '../oauth.js';
 import { skillManager } from '../skills.js';
 import { StackManager } from '../stacks.js';
 import { resolveHomePath } from '../utils.js';
@@ -75,9 +75,10 @@ export async function getInfo(cwd: string): Promise<InfoOutput> {
   for (const [name, providerConfig] of Object.entries(config.providers ?? {})) {
     if (providerConfig.authType === 'oauth') {
       // OAuth-based provider - check oauth.json for credentials
-      const oauthStorageKey = name === 'claude-pro-max' ? 'anthropic' : name;
+      const oauthStorageKey = getOAuthStorageKey(name);
+      const token = await getProviderOAuthToken(name);
       const oauthCreds = loadOAuthCredentials(oauthStorageKey);
-      if (oauthCreds) {
+      if (token && oauthCreds) {
         authStatus[name] = {
           authenticated: true,
           method: 'oauth',
@@ -112,9 +113,8 @@ export async function getInfo(cwd: string): Promise<InfoOutput> {
 
     // Also check OAuth credentials for OAuth providers
     if (providerConfig.authType === 'oauth') {
-      const oauthStorageKey = name === 'claude-pro-max' ? 'anthropic' : name;
-      const oauthCreds = loadOAuthCredentials(oauthStorageKey);
-      if (oauthCreds) hasAuth = true;
+      const token = await getProviderOAuthToken(name);
+      if (token) hasAuth = true;
     }
 
     providers[name] = {

@@ -260,6 +260,18 @@ const PROVIDER_MODELS: Record<string, string[]> = {
     'o1',
     'o1-mini',
   ],
+  wafer: [
+    'GLM-5.2',
+    'GLM-5.1',
+    'Kimi-K2.6',
+    'Kimi-K2.7-Code',
+    'deepseek-v4-pro',
+    'deepseek-v4-flash',
+    'MiniMax-M3',
+    'Qwen3.5-397B-A17B',
+    'Qwen3.6-35B-A3B',
+    'qwen3.7-max',
+  ],
 };
 
 /**
@@ -380,62 +392,81 @@ export async function addModel(options: AddModelOptions) {
 
     // Get model if not provided
     if (!modelId) {
-      // Try to use the model registry
-      let registry = loadRegistry();
-
-      if (!registry || isRegistryStale(registry)) {
-        console.log('\nSyncing model registry...');
-        try {
-          registry = await syncRegistry();
-        } catch (error) {
-          if (registry) {
-            console.log('Warning: Could not sync, using cached registry');
-          } else {
-            console.error(`\nFailed to sync registry: ${(error as Error).message}`);
-            console.error('Run `karl models sync` to fetch available models.');
-            rl.close();
-            process.exit(1);
-          }
-        }
-      }
-
-      // Filter models by provider
-      const providerPrefix = getProviderPrefix(providerKey);
-      const availableModels = registry
-        ? getModels(registry, { provider: providerPrefix }).filter(m =>
-            isModelAvailableForProvider(m, providerKey!)
-          )
-        : [];
-
-      if (availableModels.length > 0) {
+      const knownProviderModels = PROVIDER_MODELS[providerKey];
+      if (knownProviderModels) {
         console.log(`\nAvailable models for ${providerKey}:`);
-        const displayModels = availableModels.slice(0, 20);
-        displayModels.forEach((m, i) => {
-          console.log(`  ${i + 1}. ${m.name} (${m.id})`);
+        knownProviderModels.forEach((model, i) => {
+          console.log(`  ${i + 1}. ${model}`);
         });
-        if (availableModels.length > 20) {
-          console.log(`  ... and ${availableModels.length - 20} more (use 'karl models browse' to see all)`);
-        }
         console.log(`  Or enter a custom model ID`);
         console.log('');
 
         const modelInput = await prompt(rl, 'Model [1]: ') || '1';
         const modelIndex = parseInt(modelInput, 10);
 
-        if (modelIndex >= 1 && modelIndex <= displayModels.length) {
-          const selectedModel = displayModels[modelIndex - 1];
-          // Map to provider-specific model ID
-          modelId = mapToProvider(selectedModel.id, providerKey);
+        if (modelIndex >= 1 && modelIndex <= knownProviderModels.length) {
+          modelId = knownProviderModels[modelIndex - 1];
         } else {
           modelId = modelInput;
         }
       } else {
-        // No models in registry for this provider
-        modelId = await prompt(rl, 'Model ID: ');
-        if (!modelId) {
-          console.error('Model ID is required.');
-          rl.close();
-          process.exit(1);
+        // Try to use the model registry
+        let registry = loadRegistry();
+
+        if (!registry || isRegistryStale(registry)) {
+          console.log('\nSyncing model registry...');
+          try {
+            registry = await syncRegistry();
+          } catch (error) {
+            if (registry) {
+              console.log('Warning: Could not sync, using cached registry');
+            } else {
+              console.error(`\nFailed to sync registry: ${(error as Error).message}`);
+              console.error('Run `karl models sync` to fetch available models.');
+              rl.close();
+              process.exit(1);
+            }
+          }
+        }
+
+        // Filter models by provider
+        const providerPrefix = getProviderPrefix(providerKey);
+        const availableModels = registry
+          ? getModels(registry, { provider: providerPrefix }).filter(m =>
+              isModelAvailableForProvider(m, providerKey!)
+            )
+          : [];
+
+        if (availableModels.length > 0) {
+          console.log(`\nAvailable models for ${providerKey}:`);
+          const displayModels = availableModels.slice(0, 20);
+          displayModels.forEach((m, i) => {
+            console.log(`  ${i + 1}. ${m.name} (${m.id})`);
+          });
+          if (availableModels.length > 20) {
+            console.log(`  ... and ${availableModels.length - 20} more (use 'karl models browse' to see all)`);
+          }
+          console.log(`  Or enter a custom model ID`);
+          console.log('');
+
+          const modelInput = await prompt(rl, 'Model [1]: ') || '1';
+          const modelIndex = parseInt(modelInput, 10);
+
+          if (modelIndex >= 1 && modelIndex <= displayModels.length) {
+            const selectedModel = displayModels[modelIndex - 1];
+            // Map to provider-specific model ID
+            modelId = mapToProvider(selectedModel.id, providerKey);
+          } else {
+            modelId = modelInput;
+          }
+        } else {
+          // No models in registry for this provider
+          modelId = await prompt(rl, 'Model ID: ');
+          if (!modelId) {
+            console.error('Model ID is required.');
+            rl.close();
+            process.exit(1);
+          }
         }
       }
     }

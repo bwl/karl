@@ -594,10 +594,27 @@ async function runTaskWithRetry(
 }
 
 async function loadVersion(): Promise<string> {
-  const pkgPath = new URL('../package.json', import.meta.url);
-  const content = await Bun.file(pkgPath).text();
-  const pkg = JSON.parse(content) as { version?: string };
-  return pkg.version ?? '0.0.0';
+  const candidates: Array<string | URL> = [
+    new URL('../package.json', import.meta.url),
+    path.join(path.dirname(process.argv[1] ?? ''), '..', 'package.json'),
+    path.join(process.cwd(), 'packages/karl/package.json')
+  ];
+
+  for (const candidate of candidates) {
+    try {
+      const content = candidate instanceof URL
+        ? await Bun.file(candidate).text()
+        : await readTextIfExists(candidate);
+      if (!content) continue;
+
+      const pkg = JSON.parse(content) as { version?: string };
+      return pkg.version ?? '0.0.0';
+    } catch {
+      // Keep looking; compiled Bun binaries expose bundled paths via /$bunfs.
+    }
+  }
+
+  return '0.0.0';
 }
 
 async function main() {
@@ -757,7 +774,12 @@ async function main() {
   // Handle 'agent' command - interactive orchestrator REPL
   else if (firstArg === 'agent') {
     const agentArgs = args.slice(1);
-    const { options: agentOptions } = parseArgs(agentArgs);
+    const { options: agentOptions, wantsHelp } = parseArgs(agentArgs);
+    if (wantsHelp) {
+      const { printAgentHelp } = await import('./commands/agent-repl.js');
+      printAgentHelp();
+      return;
+    }
     const agentCwd = process.cwd();
     const config = await loadConfig(agentCwd);
     const { handleAgentRepl } = await import('./commands/agent-repl.js');
@@ -1194,6 +1216,9 @@ async function main() {
       } catch (error) {
         console.error(`History error: ${formatError(error)}`);
       }
+    }
+    if (result.status !== 'success') {
+      process.exitCode = 1;
     }
   }
 }

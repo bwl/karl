@@ -11,9 +11,10 @@ import { providerExists } from './providers.js';
 import { applyOverlay, renderOverlay, updateOverlay } from '../tui/overlays.js';
 import type { OverlayState, OverlayCommand, PickerItem } from '../tui/overlays.js';
 import { padRight, truncateLine, wrapText } from '../tui/text.js';
-import { loadOAuthCredentials } from '../oauth.js';
+import { getOAuthStorageKey, isOAuthCredentialsExpired, loadOAuthCredentials } from '../oauth.js';
 import { skillManager } from '../skills.js';
 import type { KarlConfig, ModelConfig, ProviderConfig, StackConfig } from '../types.js';
+import { blessed } from '../tui/blessed-lite.js';
 
 const GLOBAL_CONFIG_PATH = resolveHomePath('~/.config/karl/karl.json');
 const GLOBAL_MODELS_DIR = resolveHomePath('~/.config/karl/models');
@@ -102,6 +103,8 @@ interface StackEditField {
 
 interface TuiState {
   sectionIndex: number;
+  scrollOffset: number;
+  scrollTargetIndex?: number;
   itemIndexBySection: Partial<Record<SectionId, number>>;
   busy: boolean;
   overlay?: OverlayState;
@@ -505,8 +508,9 @@ function formatPrice(value?: number): string {
 
 function formatProviderAuth(key: string, provider: ProviderConfig): string {
   if (provider.authType === 'oauth') {
-    const oauthKey = key === 'claude-pro-max' ? 'anthropic' : key;
+    const oauthKey = getOAuthStorageKey(key);
     const creds = loadOAuthCredentials(oauthKey);
+    if (creds && isOAuthCredentialsExpired(creds)) return 'oauth (refresh needed)';
     return creds ? 'oauth (logged in)' : 'oauth (not logged in)';
   }
 
@@ -647,7 +651,8 @@ function renderListSection<T>(
   width: number,
   height: number,
   formatRow: (item: T) => string,
-  formatDetails: (item: T) => string[]
+  formatDetails: (item: T) => string[],
+  compact = false
 ): string[] {
   const lines: string[] = [title];
   if (items.length === 0) {
@@ -674,8 +679,10 @@ function renderListSection<T>(
     lines.push(row);
   }
 
-  while (lines.length < listHeight) {
-    lines.push('');
+  if (!compact) {
+    while (lines.length < listHeight) {
+      lines.push('');
+    }
   }
 
   if (detailHeight > 0) {
@@ -764,7 +771,7 @@ function renderFiles(data: TuiData, width: number, height: number): string[] {
   return lines.slice(0, height);
 }
 
-function renderModels(data: TuiData, state: TuiState, width: number, height: number): string[] {
+function renderModels(data: TuiData, state: TuiState, width: number, height: number, compact = false): string[] {
   const selectedIndex = state.itemIndexBySection.models ?? 0;
   return renderListSection(
     'Models',
@@ -797,11 +804,12 @@ function renderModels(data: TuiData, state: TuiState, width: number, height: num
         lines.push(...formatField('Pricing', pricing, width));
       }
       return lines;
-    }
+    },
+    compact
   );
 }
 
-function renderProviders(data: TuiData, state: TuiState, width: number, height: number): string[] {
+function renderProviders(data: TuiData, state: TuiState, width: number, height: number, compact = false): string[] {
   const selectedIndex = state.itemIndexBySection.providers ?? 0;
   return renderListSection(
     'Providers',
@@ -832,11 +840,12 @@ function renderProviders(data: TuiData, state: TuiState, width: number, height: 
         lines.push(...formatField(`Extra:${key}`, value, width));
       }
       return lines;
-    }
+    },
+    compact
   );
 }
 
-function renderStacks(data: TuiData, state: TuiState, width: number, height: number): string[] {
+function renderStacks(data: TuiData, state: TuiState, width: number, height: number, compact = false): string[] {
   const selectedIndex = state.itemIndexBySection.stacks ?? 0;
   return renderListSection(
     'Stacks',
@@ -870,7 +879,8 @@ function renderStacks(data: TuiData, state: TuiState, width: number, height: num
       if (resolved?.unrestricted) lines.push(...formatField('Unrestricted', 'true', width));
       if (resolved?.context) lines.push(...formatField('Context', resolved.context, width));
       return lines;
-    }
+    },
+    compact
   );
 }
 
@@ -967,16 +977,16 @@ function buildStackEditFields(entry: StackEntry): StackEditField[] {
   ];
 }
 
-function renderSection(section: Section, data: TuiData, state: TuiState, width: number, height: number): string[] {
+function renderSection(section: Section, data: TuiData, state: TuiState, width: number, height: number, compact = false): string[] {
   switch (section.id) {
     case 'overview':
       return renderOverview(data, width, height);
     case 'models':
-      return renderModels(data, state, width, height);
+      return renderModels(data, state, width, height, compact);
     case 'providers':
-      return renderProviders(data, state, width, height);
+      return renderProviders(data, state, width, height, compact);
     case 'stacks':
-      return renderStacks(data, state, width, height);
+      return renderStacks(data, state, width, height, compact);
     case 'tools':
       return renderTools(data, width, height);
     case 'retry':
@@ -992,27 +1002,91 @@ function renderSection(section: Section, data: TuiData, state: TuiState, width: 
   }
 }
 
-function getFooterHints(section: Section): string[] {
+function getSectionActions(section: Section): string {
   switch (section.id) {
     case 'models':
-      return ['Arrows: move  A: add  E: edit  D: remove  S: set default  R: refresh  Q: quit'];
+      return 'enter/e edit  a add  s default  d remove';
     case 'providers':
-      return ['Arrows: move  A: add  E: edit  D: remove  L: login  O: logout  R: refresh  Q: quit'];
+      return 'enter/e edit  a add  L login  o logout  d remove';
     case 'stacks':
-      return ['Arrows: move  N: new  Enter/E: edit  X: external editor  D: remove  R: refresh  Q: quit'];
+      return 'enter/e edit  a/n new  x external  d remove';
     case 'files':
     case 'tools':
     case 'retry':
     case 'history':
     case 'agent':
-      return ['G: edit global config  P: edit project config  R: refresh  Q: quit'];
+      return 'g global config  p project config  m merged json';
     case 'overview':
     default:
-      return ['Tab/Arrows: navigate  M: show merged  G/P: edit config  R: refresh  Q: quit'];
+      return 'm merged json  g global config  p project config';
   }
 }
 
-function renderFrame(sections: Section[], data: TuiData, state: TuiState, width: number, height: number): string[] {
+function getFooterHints(section: Section): string[] {
+  return [
+    'menu up/down/j/k  rows left/right/h/l  mouse wheel scrolls right pane  jump 1-9  help ?  quit q',
+    `actions ${getSectionActions(section)}`
+  ];
+}
+
+function renderSectionDivider(label: string, width: number, active: boolean): string {
+  const marker = active ? '==' : '--';
+  const title = ` ${label} `;
+  const fill = active ? '=' : '-';
+  const remaining = Math.max(0, width - marker.length - title.length - 1);
+  return truncateLine(`${marker}${title}${fill.repeat(remaining)}`, width);
+}
+
+interface ConfigDocument {
+  lines: string[];
+  sectionStarts: number[];
+}
+
+function getSectionIndexForScroll(sectionStarts: number[], scrollOffset: number): number {
+  let activeIndex = 0;
+  for (let i = 0; i < sectionStarts.length; i++) {
+    if (sectionStarts[i] <= scrollOffset) {
+      activeIndex = i;
+      continue;
+    }
+    break;
+  }
+  return activeIndex;
+}
+
+function renderConfigDocument(
+  sections: Section[],
+  data: TuiData,
+  state: TuiState,
+  width: number
+): ConfigDocument {
+  const lines: string[] = [];
+  const sectionStarts: number[] = [];
+
+  for (let i = 0; i < sections.length; i++) {
+    const section = sections[i];
+    if (lines.length > 0) {
+      lines.push('');
+    }
+
+    sectionStarts[i] = lines.length;
+    lines.push(renderSectionDivider(getSectionLabel(section, data), width, i === state.sectionIndex));
+
+    const rawBody = renderSection(section, data, state, width, 5000, true).slice(1);
+    while (rawBody.length > 0 && rawBody[rawBody.length - 1] === '') {
+      rawBody.pop();
+    }
+
+    const body = rawBody.length > 0 ? rawBody : ['(empty)'];
+    for (const line of body) {
+      lines.push(truncateLine(line, width));
+    }
+  }
+
+  return { lines, sectionStarts };
+}
+
+function computePaneWidths(width: number): { leftWidth: number; rightWidth: number } {
   const minLeft = 10;
   const minRight = 20;
   let leftWidth = Math.floor(width * 0.25);
@@ -1022,20 +1096,62 @@ function renderFrame(sections: Section[], data: TuiData, state: TuiState, width:
     rightWidth = Math.max(0, width - minLeft - 1);
     leftWidth = Math.max(0, width - rightWidth - 1);
   }
+  return { leftWidth, rightWidth };
+}
 
+function parseMouseWheel(sequence: string): { direction: 'up' | 'down'; x: number; y: number } | null {
+  const match = sequence.match(/\x1b\[<(\d+);(\d+);(\d+)M/);
+  if (!match) return null;
+
+  const button = parseInt(match[1], 10);
+  if ((button & 64) !== 64) return null;
+
+  const wheelButton = button & 3;
+  if (wheelButton !== 0 && wheelButton !== 1) return null;
+
+  return {
+    direction: wheelButton === 0 ? 'up' : 'down',
+    x: parseInt(match[2], 10),
+    y: parseInt(match[3], 10),
+  };
+}
+
+function renderFrame(sections: Section[], data: TuiData, state: TuiState, width: number, height: number): string[] {
+  const { leftWidth, rightWidth } = computePaneWidths(width);
+
+  const projectStatus = data.paths.projectExists ? 'project config present' : 'project config absent';
   const headerLines = [
-    truncateLine(`Karl Config - ${process.cwd()}`, width),
+    truncateLine('Karl Config', width),
+    truncateLine(`cwd ${process.cwd()}`, width),
+    truncateLine(`default ${formatValue(data.config.defaultModel)}  models ${data.models.length}  providers ${data.providers.length}  stacks ${data.stacks.length}  ${projectStatus}`, width),
     '-'.repeat(width)
   ];
 
+  const footerLineCount = 2;
+  const contentHeight = Math.max(1, height - headerLines.length - footerLineCount);
+  let document = renderConfigDocument(sections, data, state, rightWidth);
+  const maxScroll = Math.max(0, document.lines.length - contentHeight);
+  if (state.scrollTargetIndex !== undefined) {
+    const target = Math.max(0, Math.min(state.scrollTargetIndex, sections.length - 1));
+    state.scrollOffset = Math.min(document.sectionStarts[target] ?? 0, maxScroll);
+    state.scrollTargetIndex = undefined;
+  } else {
+    state.scrollOffset = Math.max(0, Math.min(state.scrollOffset, maxScroll));
+  }
+  const activeSectionIndex = getSectionIndexForScroll(document.sectionStarts, state.scrollOffset);
+  if (activeSectionIndex !== state.sectionIndex) {
+    state.sectionIndex = activeSectionIndex;
+    document = renderConfigDocument(sections, data, state, rightWidth);
+  }
+  const bodyLines = document.lines.slice(state.scrollOffset, state.scrollOffset + contentHeight);
   const footerHints = getFooterHints(sections[state.sectionIndex]);
   const footerLines = footerHints.map((line) => truncateLine(line, width));
 
-  const contentHeight = Math.max(1, height - headerLines.length - footerLines.length);
   const navLines: string[] = [];
   for (let i = 0; i < sections.length; i++) {
     const prefix = i === state.sectionIndex ? '> ' : '  ';
-    const label = truncateLine(getSectionLabel(sections[i], data), leftWidth - prefix.length);
+    const number = `${i + 1}. `;
+    const label = truncateLine(`${number}${getSectionLabel(sections[i], data)}`, leftWidth - prefix.length);
     const padded = padRight(`${prefix}${label}`, leftWidth);
     navLines.push(padded);
   }
@@ -1043,14 +1159,6 @@ function renderFrame(sections: Section[], data: TuiData, state: TuiState, width:
   while (navLines.length < contentHeight) {
     navLines.push(padRight('', leftWidth));
   }
-
-  const bodyLines = renderSection(
-    sections[state.sectionIndex],
-    data,
-    state,
-    rightWidth,
-    contentHeight
-  );
 
   const lines: string[] = [];
   lines.push(...headerLines);
@@ -1077,7 +1185,7 @@ function renderStackEditorFrame(
   ];
 
   const footerLines = [
-    truncateLine('Arrows: move  Enter: edit  Backspace: clear  X: external editor  R: refresh  Esc: back  Q: quit', width)
+    truncateLine('move arrows/jk  enter/l edit  c/backspace clear  x external  r refresh  ? help  esc/b back  q quit', width)
   ];
 
   const contentHeight = Math.max(1, height - headerLines.length - footerLines.length);
@@ -1254,12 +1362,487 @@ async function setConfig(args: string[]): Promise<void> {
   }
 }
 
+async function launchBlessedConfigTui(): Promise<void> {
+  const backend = createDefaultBackend();
+  const cwd = process.cwd();
+  const sections: Section[] = [
+    { id: 'overview', label: 'Overview', type: 'detail' },
+    { id: 'models', label: 'Models', type: 'list' },
+    { id: 'providers', label: 'Providers', type: 'list' },
+    { id: 'stacks', label: 'Stacks', type: 'list' },
+    { id: 'tools', label: 'Tools', type: 'detail' },
+    { id: 'retry', label: 'Retry', type: 'detail' },
+    { id: 'history', label: 'History', type: 'detail' },
+    { id: 'agent', label: 'Agent', type: 'detail' },
+    { id: 'files', label: 'Files', type: 'detail' },
+  ];
+
+  let data = await loadTuiData(cwd);
+  let activeSection = 0;
+  let sectionStarts: number[] = [];
+  const tuiState: TuiState = {
+    sectionIndex: 0,
+    scrollOffset: 0,
+    itemIndexBySection: { models: 0, providers: 0, stacks: 0 },
+    busy: false,
+    mode: 'main',
+  };
+
+  const screen = blessed.screen({
+    smartCSR: true,
+    fullUnicode: true,
+    title: 'karl config',
+  });
+
+  const header = blessed.box({
+    parent: screen,
+    top: 0,
+    left: 0,
+    width: '100%',
+    height: 4,
+    tags: false,
+    style: { fg: 'white', bg: 'black' },
+  });
+
+  const menu = blessed.list({
+    parent: screen,
+    top: 4,
+    left: 0,
+    width: 28,
+    bottom: 2,
+    mouse: true,
+    keys: false,
+    tags: false,
+    scrollbar: {
+      ch: ' ',
+      style: { bg: 'white' },
+      track: { bg: 'black' },
+    },
+    style: {
+      fg: 'white',
+      bg: 'black',
+      selected: { fg: 'black', bg: 'white' },
+      item: { fg: 'white', bg: 'black' },
+    },
+  });
+
+  const content = blessed.box({
+    parent: screen,
+    top: 4,
+    left: 29,
+    right: 0,
+    bottom: 2,
+    scrollable: true,
+    alwaysScroll: true,
+    mouse: true,
+    keys: true,
+    vi: true,
+    tags: false,
+    padding: { left: 1, right: 1 },
+    scrollbar: {
+      ch: ' ',
+      style: { bg: 'white' },
+      track: { bg: 'black' },
+    },
+    style: {
+      fg: 'white',
+      bg: 'black',
+      scrollbar: { bg: 'white' },
+    },
+  });
+
+  const footer = blessed.box({
+    parent: screen,
+    bottom: 0,
+    left: 0,
+    width: '100%',
+    height: 2,
+    tags: false,
+    style: { fg: 'white', bg: 'black' },
+  });
+
+  const prompt = blessed.prompt({
+    parent: screen,
+    top: 'center',
+    left: 'center',
+    width: '70%',
+    height: 8,
+    border: 'line',
+    mouse: true,
+    keys: true,
+    tags: false,
+    style: {
+      fg: 'white',
+      bg: 'black',
+      border: { fg: 'white' },
+    },
+  });
+
+  const question = blessed.question({
+    parent: screen,
+    top: 'center',
+    left: 'center',
+    width: '70%',
+    height: 6,
+    border: 'line',
+    mouse: true,
+    keys: true,
+    tags: false,
+    style: {
+      fg: 'white',
+      bg: 'black',
+      border: { fg: 'white' },
+    },
+  });
+
+  const message = blessed.message({
+    parent: screen,
+    hidden: true,
+    top: 'center',
+    left: 'center',
+    width: '80%',
+    height: '70%',
+    border: 'line',
+    scrollable: true,
+    alwaysScroll: true,
+    mouse: true,
+    keys: true,
+    vi: true,
+    tags: false,
+    style: {
+      fg: 'white',
+      bg: 'black',
+      border: { fg: 'white' },
+      scrollbar: { bg: 'white' },
+    },
+    scrollbar: {
+      ch: ' ',
+      style: { bg: 'white' },
+      track: { bg: 'black' },
+    },
+  });
+
+  const detailWidth = () => Math.max(40, (content.width as number | undefined) ?? (process.stdout.columns - 31));
+
+  const clampSelections = () => {
+    const clamp = (index: number | undefined, length: number) => {
+      if (length <= 0) return 0;
+      return Math.max(0, Math.min(index ?? 0, length - 1));
+    };
+    tuiState.itemIndexBySection.models = clamp(tuiState.itemIndexBySection.models, data.models.length);
+    tuiState.itemIndexBySection.providers = clamp(tuiState.itemIndexBySection.providers, data.providers.length);
+    tuiState.itemIndexBySection.stacks = clamp(tuiState.itemIndexBySection.stacks, data.stacks.length);
+  };
+
+  const getSectionItems = (sectionId: SectionId): unknown[] => {
+    if (sectionId === 'models') return data.models;
+    if (sectionId === 'providers') return data.providers;
+    if (sectionId === 'stacks') return data.stacks;
+    return [];
+  };
+
+  const selectedModel = () => data.models[tuiState.itemIndexBySection.models ?? 0];
+  const selectedProvider = () => data.providers[tuiState.itemIndexBySection.providers ?? 0];
+  const selectedStack = () => data.stacks[tuiState.itemIndexBySection.stacks ?? 0];
+
+  const buildDocument = (): string[] => {
+    clampSelections();
+    tuiState.sectionIndex = activeSection;
+    const lines: string[] = [];
+    sectionStarts = [];
+
+    for (let i = 0; i < sections.length; i++) {
+      if (lines.length > 0) lines.push('');
+      const section = sections[i];
+      sectionStarts[i] = lines.length;
+      lines.push(renderSectionDivider(getSectionLabel(section, data), detailWidth(), i === activeSection));
+
+      const body = renderSection(section, data, tuiState, detailWidth(), 5000, true).slice(1);
+      while (body.length > 0 && body[body.length - 1] === '') {
+        body.pop();
+      }
+      lines.push(...(body.length > 0 ? body : ['(empty)']));
+    }
+
+    return lines;
+  };
+
+  const syncActiveFromScroll = () => {
+    const scroll = content.getScroll ? content.getScroll() : 0;
+    const next = getSectionIndexForScroll(sectionStarts, scroll);
+    if (next !== activeSection) {
+      activeSection = next;
+      tuiState.sectionIndex = activeSection;
+      menu.select(activeSection);
+      updateFooter();
+      screen.render();
+    }
+  };
+
+  const updateFooter = () => {
+    const section = sections[activeSection];
+    footer.setContent(getFooterHints(section).join('\n'));
+  };
+
+  const refreshView = (preserveScroll = true) => {
+    const scroll = preserveScroll && content.getScroll ? content.getScroll() : 0;
+    header.setContent([
+      'Karl Config',
+      `cwd ${cwd}`,
+      `default ${formatValue(data.config.defaultModel)}  models ${data.models.length}  providers ${data.providers.length}  stacks ${data.stacks.length}  ${data.paths.projectExists ? 'project config present' : 'project config absent'}`,
+      '-'.repeat(Math.max(10, screen.width as number)),
+    ].join('\n'));
+    menu.setItems(sections.map((section, index) => `${index + 1}. ${getSectionLabel(section, data)}`));
+    menu.select(activeSection);
+    content.setContent(buildDocument().join('\n'));
+    if (preserveScroll && content.scrollTo) {
+      content.scrollTo(scroll);
+    }
+    updateFooter();
+    screen.render();
+  };
+
+  const jumpToSection = (index: number) => {
+    activeSection = Math.max(0, Math.min(index, sections.length - 1));
+    tuiState.sectionIndex = activeSection;
+    menu.select(activeSection);
+    content.setContent(buildDocument().join('\n'));
+    content.scrollTo(sectionStarts[activeSection] ?? 0);
+    updateFooter();
+    screen.render();
+  };
+
+  const reload = async () => {
+    data = await loadTuiData(cwd);
+    clampSelections();
+    refreshView(true);
+  };
+
+  const askInput = (label: string, value = ''): Promise<string | null> =>
+    new Promise((resolve) => {
+      prompt.input(label, value, (error: unknown, result: string | undefined) => {
+        if (error) resolve(null);
+        else resolve(result ?? '');
+      });
+    });
+
+  const askConfirm = (label: string): Promise<boolean> =>
+    new Promise((resolve) => {
+      question.ask(label, (_error: unknown, result: boolean) => resolve(Boolean(result)));
+    });
+
+  const showMessage = (text: string): Promise<void> =>
+    new Promise((resolve) => {
+      message.display(text, 0, () => resolve());
+    });
+
+  const runTerminalAction = async (action: () => Promise<void>, pauseAfter = true) => {
+    screen.leave();
+    try {
+      await action();
+    } catch (error) {
+      console.error(formatError(error));
+    }
+    if (pauseAfter) {
+      await waitForEnter();
+    }
+    await reload();
+    screen.enter();
+    refreshView(true);
+  };
+
+  const editConfigFromTui = async (scope: 'global' | 'project') => {
+    await runTerminalAction(async () => {
+      await editConfig(scope);
+    }, !hasEditor());
+  };
+
+  const editCurrent = async () => {
+    const sectionId = sections[activeSection].id;
+    if (sectionId === 'models') {
+      const entry = selectedModel();
+      if (!entry) return;
+      await runTerminalAction(async () => backend.editModel(entry.alias), !hasEditor());
+      return;
+    }
+    if (sectionId === 'providers') {
+      const entry = selectedProvider();
+      if (!entry) return;
+      await runTerminalAction(async () => backend.editProvider(entry.key), !hasEditor());
+      return;
+    }
+    if (sectionId === 'stacks') {
+      const entry = selectedStack();
+      if (!entry) return;
+      await runTerminalAction(async () => {
+        if (entry.source === 'file') {
+          await backend.editStack(entry.name);
+        } else {
+          const target = entry.source === 'inline-project' ? 'project' : 'global';
+          await editConfig(target);
+        }
+      }, !hasEditor());
+    }
+  };
+
+  const addCurrent = async () => {
+    const sectionId = sections[activeSection].id;
+    if (sectionId === 'models') {
+      const alias = await askInput('Model alias');
+      if (!alias?.trim()) return;
+      await runTerminalAction(async () => backend.addModel({ alias: alias.trim() }));
+      return;
+    }
+    if (sectionId === 'providers') {
+      await runTerminalAction(async () => backend.addProvider());
+      return;
+    }
+    if (sectionId === 'stacks') {
+      const name = await askInput('Stack name');
+      if (!name?.trim()) return;
+      const global = await askConfirm('Create this stack globally? Yes = global, No = project');
+      await runTerminalAction(async () => backend.createStack(name.trim(), { global }), false);
+    }
+  };
+
+  const removeCurrent = async () => {
+    const sectionId = sections[activeSection].id;
+    if (sectionId === 'models') {
+      const entry = selectedModel();
+      if (!entry) return;
+      if (entry.source !== 'file') {
+        await showMessage('Inline models live in a config file. Use g or p to edit the config directly.');
+        return;
+      }
+      if (await askConfirm(`Remove model "${entry.alias}"?`)) {
+        await runTerminalAction(async () => backend.removeModel(entry.alias), false);
+      }
+      return;
+    }
+    if (sectionId === 'providers') {
+      const entry = selectedProvider();
+      if (!entry) return;
+      if (entry.source !== 'file') {
+        await showMessage('Inline providers live in a config file. Use g or p to edit the config directly.');
+        return;
+      }
+      if (await askConfirm(`Remove provider "${entry.key}"?`)) {
+        await runTerminalAction(async () => backend.removeProvider(entry.key), false);
+      }
+      return;
+    }
+    if (sectionId === 'stacks') {
+      const entry = selectedStack();
+      if (!entry) return;
+      if (entry.source !== 'file') {
+        await showMessage('Inline stacks live in a config file. Use g or p to edit the config directly.');
+        return;
+      }
+      if (await askConfirm(`Remove stack "${entry.name}"?`)) {
+        await runTerminalAction(async () => backend.removeStack(entry.name), false);
+      }
+    }
+  };
+
+  const moveRow = (delta: number) => {
+    const sectionId = sections[activeSection].id;
+    const items = getSectionItems(sectionId);
+    if (items.length === 0) return;
+    const current = tuiState.itemIndexBySection[sectionId] ?? 0;
+    tuiState.itemIndexBySection[sectionId] = Math.max(0, Math.min(current + delta, items.length - 1));
+    refreshView(true);
+  };
+
+  content.on('scroll', syncActiveFromScroll);
+  menu.on('select', (_item: unknown, index: number) => jumpToSection(index));
+
+  screen.key(['q', 'C-c'], () => {
+    screen.destroy();
+  });
+  screen.key(['up', 'k'], () => jumpToSection(activeSection - 1));
+  screen.key(['down', 'j'], () => jumpToSection(activeSection + 1));
+  screen.key(['left', 'h'], () => moveRow(-1));
+  screen.key(['right', 'l'], () => moveRow(1));
+  screen.key(['tab'], () => jumpToSection(activeSection + 1));
+  screen.key(['S-tab'], () => jumpToSection(activeSection - 1));
+  for (let i = 0; i < sections.length; i++) {
+    screen.key(String(i + 1), () => jumpToSection(i));
+  }
+  screen.key(['enter', 'e'], () => {
+    void editCurrent();
+  });
+  screen.key(['a', 'n'], () => {
+    void addCurrent();
+  });
+  screen.key('d', () => {
+    void removeCurrent();
+  });
+  screen.key('s', () => {
+    const entry = selectedModel();
+    if (sections[activeSection].id === 'models' && entry) {
+      void runTerminalAction(async () => backend.setDefaultModel(entry.alias), false);
+    }
+  });
+  screen.key('r', () => {
+    void reload();
+  });
+  screen.key('g', () => {
+    void editConfigFromTui('global');
+  });
+  screen.key('p', () => {
+    void editConfigFromTui('project');
+  });
+  screen.key('m', () => {
+    void showMessage(JSON.stringify(data.config, null, 2));
+  });
+  screen.key('?', () => {
+    void showMessage([
+      'Keyboard',
+      '',
+      'up/down or j/k: move the left menu and scroll the right pane to that section',
+      'mouse wheel: scroll the right pane; the left menu follows the section at the top',
+      'left/right or h/l: move the selected row inside Models, Providers, or Stacks',
+      'enter/e: edit selected item',
+      'a/n: add model/provider/stack',
+      'd: remove selected item',
+      's: set selected model as default',
+      'Shift+L: login selected provider, o: logout selected provider',
+      'g/p: edit global or project config',
+      'm: show merged config JSON',
+      'r: refresh, q: quit',
+    ].join('\n'));
+  });
+  screen.key('o', () => {
+    const entry = selectedProvider();
+    if (sections[activeSection].id === 'providers' && entry) {
+      void runTerminalAction(async () => backend.logoutProvider(entry.key));
+    }
+  });
+  screen.key('x', () => {
+    if (sections[activeSection].id === 'stacks') {
+      void editCurrent();
+    }
+  });
+  screen.key(['L', 'S-l'], () => {
+    const entry = selectedProvider();
+    if (sections[activeSection].id === 'providers' && entry) {
+      void runTerminalAction(async () => backend.loginProvider(entry.key));
+    }
+  });
+
+  refreshView(false);
+  menu.focus();
+}
+
 export async function launchConfigTui(): Promise<void> {
   if (!process.stdin.isTTY || !process.stdout.isTTY) {
     console.error('Config TUI requires an interactive terminal.');
     await showConfig('merged');
     return;
   }
+
+  await launchBlessedConfigTui();
+  return;
 
   const backend = createDefaultBackend();
   type PendingOverlay =
@@ -1389,6 +1972,8 @@ export async function launchConfigTui(): Promise<void> {
 
   const state: TuiState = {
     sectionIndex: 0,
+    scrollOffset: 0,
+    scrollTargetIndex: 0,
     itemIndexBySection: { models: 0, providers: 0, stacks: 0 },
     busy: false,
     overlay: undefined,
@@ -1422,6 +2007,14 @@ export async function launchConfigTui(): Promise<void> {
 
   const clearScreen = () => {
     process.stdout.write('\x1b[2J\x1b[H');
+  };
+
+  const enableMouse = () => {
+    process.stdout.write('\x1b[?1000h\x1b[?1006h');
+  };
+
+  const disableMouse = () => {
+    process.stdout.write('\x1b[?1000l\x1b[?1002l\x1b[?1006l');
   };
 
   const render = () => {
@@ -1477,6 +2070,7 @@ export async function launchConfigTui(): Promise<void> {
 
   const suspend = () => {
     process.stdout.write('\x1b[?25h');
+    disableMouse();
     process.stdin.setRawMode?.(false);
     process.stdin.pause();
     process.stdin.removeListener('keypress', onKeypress);
@@ -1490,15 +2084,41 @@ export async function launchConfigTui(): Promise<void> {
     process.stdin.on('keypress', onKeypress);
     process.stdout.on('resize', render);
     process.stdout.write('\x1b[?25l');
+    enableMouse();
   };
 
   const exit = () => {
     process.stdout.write('\x1b[?25h');
+    disableMouse();
     process.stdin.setRawMode?.(false);
     process.stdin.pause();
     process.stdin.removeListener('keypress', onKeypress);
     process.stdout.removeListener('resize', render);
     clearScreen();
+  };
+
+  const showKeyboardHelp = () => {
+    state.overlay = {
+      kind: 'message',
+      title: 'Keyboard',
+      message: [
+        'Move the left menu with Up/Down or j/k. Use Tab and Shift+Tab to move between sections. Press 1-9 to jump directly to a section.',
+        '',
+        'Scroll the right pane with the mouse wheel. As sections pass the top of the pane, the left menu highlight follows.',
+        '',
+        'On Models, Providers, and Stacks, move the selected row with Left/Right or h/l.',
+        '',
+        'Enter is the primary action: edit the selected model/provider or open the selected stack editor.',
+        '',
+        'Main actions: a add/new, e edit, d remove, s set default model, l login provider, o logout provider, x open stack in external editor.',
+        '',
+        'Config actions: g edit global config, p edit project config, m show merged config JSON, r refresh.',
+        '',
+        'Stack editor: enter/l edits a field, c or Backspace clears it to inherit, b or Esc returns to the main screen.',
+      ].join('\n'),
+      hint: 'Enter/Esc/q/? closes this help'
+    };
+    render();
   };
 
   const runAction = async (
@@ -1898,6 +2518,7 @@ export async function launchConfigTui(): Promise<void> {
   const moveSection = (delta: number) => {
     const next = (state.sectionIndex + delta + sections.length) % sections.length;
     state.sectionIndex = next;
+    state.scrollTargetIndex = next;
     render();
   };
 
@@ -1915,10 +2536,27 @@ export async function launchConfigTui(): Promise<void> {
     render();
   };
 
-  const onKeypress = async (str: string, key: { name?: string; ctrl?: boolean; shift?: boolean; meta?: boolean }) => {
+  const onKeypress = async (str: string, key: { name?: string; ctrl?: boolean; shift?: boolean; meta?: boolean; sequence?: string }) => {
     if (state.busy) return;
     if (key.ctrl && key.name === 'c') {
       exit();
+      return;
+    }
+    const wheel = parseMouseWheel(key.sequence ?? str);
+    if (wheel && !state.overlay && state.mode === 'main') {
+      const termWidth = process.stdout.columns || 80;
+      const termHeight = process.stdout.rows || 24;
+      const { leftWidth } = computePaneWidths(termWidth);
+      const headerHeight = 4;
+      const footerHeight = 2;
+      const contentHeight = Math.max(1, termHeight - headerHeight - footerHeight);
+      const rightPaneStart = leftWidth + 2;
+      const inRightPane = wheel.x >= rightPaneStart && wheel.y > headerHeight && wheel.y <= headerHeight + contentHeight;
+      if (inRightPane) {
+        state.scrollTargetIndex = undefined;
+        state.scrollOffset += wheel.direction === 'down' ? 5 : -5;
+        render();
+      }
       return;
     }
     if (state.overlay) {
@@ -1933,6 +2571,10 @@ export async function launchConfigTui(): Promise<void> {
         state.overlay = undefined;
       }
       render();
+      return;
+    }
+    if (str === '?') {
+      showKeyboardHelp();
       return;
     }
     if (state.mode === 'stack-edit') {
@@ -1951,12 +2593,12 @@ export async function launchConfigTui(): Promise<void> {
         case 'q':
           exit();
           return;
-        case 'left':
         case 'up':
+        case 'k':
           moveStackField(-1);
           return;
-        case 'right':
         case 'down':
+        case 'j':
           moveStackField(1);
           return;
         case 'tab':
@@ -1970,11 +2612,13 @@ export async function launchConfigTui(): Promise<void> {
         case 'x':
           await openExternalStackEditor(entry);
           return;
+        case 'c':
         case 'backspace':
           if (currentField) {
             await clearStackField(entry, currentField.id);
           }
           return;
+        case 'l':
         case 'return':
           if (currentField) {
             await editStackField(entry, currentField);
@@ -1983,25 +2627,40 @@ export async function launchConfigTui(): Promise<void> {
       }
       return;
     }
+
+    if (/^[1-9]$/.test(str)) {
+      const nextSection = parseInt(str, 10) - 1;
+      if (nextSection >= 0 && nextSection < sections.length) {
+        state.sectionIndex = nextSection;
+        state.scrollTargetIndex = nextSection;
+        render();
+      }
+      return;
+    }
+
     switch (key.name) {
       case 'q':
       case 'escape':
         exit();
         return;
       case 'left':
-        moveSection(-1);
+      case 'h':
+        moveItem(-1);
         return;
       case 'right':
-        moveSection(1);
+      case 'l':
+        moveItem(1);
         return;
       case 'tab':
         moveSection(key.shift ? -1 : 1);
         return;
       case 'up':
-        moveItem(-1);
+      case 'k':
+        moveSection(-1);
         return;
       case 'down':
-        moveItem(1);
+      case 'j':
+        moveSection(1);
         return;
       case 'r':
         await runAction(async () => {
@@ -2047,7 +2706,7 @@ export async function launchConfigTui(): Promise<void> {
       return;
     }
 
-    if (key.name === 'n' && currentSection === 'stacks') {
+    if ((key.name === 'a' || key.name === 'n') && currentSection === 'stacks') {
       const name = await openInputOverlay({
         title: 'New Stack',
         label: 'Name',
@@ -2070,7 +2729,7 @@ export async function launchConfigTui(): Promise<void> {
       return;
     }
 
-    if (key.name === 'e' && currentSection === 'models') {
+    if ((key.name === 'e' || key.name === 'return') && currentSection === 'models') {
       const entry = data.models[state.itemIndexBySection.models ?? 0];
       if (!entry) return;
       await runAction(async () => {
@@ -2079,7 +2738,7 @@ export async function launchConfigTui(): Promise<void> {
       return;
     }
 
-    if (key.name === 'e' && currentSection === 'providers') {
+    if ((key.name === 'e' || key.name === 'return') && currentSection === 'providers') {
       const entry = data.providers[state.itemIndexBySection.providers ?? 0];
       if (!entry) return;
       await runAction(async () => {
@@ -2212,6 +2871,7 @@ export async function launchConfigTui(): Promise<void> {
   };
 
   process.stdout.write('\x1b[?25l');
+  enableMouse();
   emitKeypressEvents(process.stdin);
   process.stdin.setRawMode?.(true);
   process.stdin.resume();

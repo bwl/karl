@@ -6,11 +6,13 @@
  */
 
 import { spawn } from 'child_process';
-import { join } from 'path';
+import { existsSync, promises as fs, readdirSync, type Dirent } from 'fs';
+import { basename, join, relative, resolve, sep } from 'path';
 import { agentLoop, type AgentLoopConfig, type ToolDefinition, type Message } from './agent-loop.js';
 import type { KarlConfig } from './types.js';
 import { resolveAgentModel } from './config.js';
 import { getProviderOAuthToken } from './oauth.js';
+import { StackManager } from './stacks.js';
 
 // ============================================================================
 // Types
@@ -24,10 +26,22 @@ export interface OrchestratorState {
   isStreaming: boolean;
 }
 
+export interface KarlInvocation {
+  command: string;
+  argsPrefix: string[];
+  display: string;
+}
+
+export interface OrchestratorOptions {
+  karlInvocation?: KarlInvocation;
+}
+
 export type OrchestratorEvent =
   | { type: 'thinking'; text: string }
   | { type: 'ivo_start'; task: string }
   | { type: 'ivo_end'; contextId: string; files: number; tokens: number; budget: number }
+  | { type: 'agent_tool_start'; tool: string; detail: string }
+  | { type: 'agent_tool_end'; tool: string; summary: string; success: boolean; durationMs: number }
   | { type: 'karl_start'; command: string; task: string }
   | { type: 'karl_output'; chunk: string }
   | { type: 'karl_end'; result: string; success: boolean; durationMs: number }
@@ -38,17 +52,74 @@ export type OrchestratorEvent =
 
 type Listener = (event: OrchestratorEvent) => void;
 
+function splitCommandLine(input: string): string[] {
+  const parts = input.match(/(?:[^\s"']+|"[^"]*"|'[^']*')+/g) ?? [];
+  return parts.map(part => {
+    if (
+      (part.startsWith('"') && part.endsWith('"')) ||
+      (part.startsWith("'") && part.endsWith("'"))
+    ) {
+      return part.slice(1, -1);
+    }
+    return part;
+  });
+}
+
+export function resolveKarlInvocation(): KarlInvocation {
+  const override = process.env.KARL_AGENT_COMMAND?.trim();
+  if (override) {
+    const parts = splitCommandLine(override);
+    if (parts.length > 0) {
+      return {
+        command: parts[0],
+        argsPrefix: parts.slice(1),
+        display: override,
+      };
+    }
+  }
+
+  const execPath = process.execPath;
+  const entrypoint = process.argv[1];
+  const entrypointName = entrypoint ? basename(entrypoint) : '';
+  const hasSeparateEntrypoint =
+    entrypoint &&
+    entrypoint !== execPath &&
+    !entrypoint.startsWith('/$bunfs/') &&
+    existsSync(entrypoint) &&
+    (
+      entrypoint.endsWith('/src/cli.ts') ||
+      entrypoint.endsWith('/dist/karl') ||
+      entrypoint.endsWith('/dist/karl.js') ||
+      entrypoint.endsWith('/karl') ||
+      entrypointName === 'cli.ts'
+    );
+
+  if (hasSeparateEntrypoint) {
+    return {
+      command: execPath,
+      argsPrefix: [entrypoint],
+      display: `${basename(execPath)} ${entrypoint}`,
+    };
+  }
+
+  return {
+    command: execPath,
+    argsPrefix: [],
+    display: execPath,
+  };
+}
+
 // ============================================================================
 // System Prompt
 // ============================================================================
 
-const ORCHESTRATOR_SYSTEM_PROMPT = `You are a strategic coordinator. You accomplish goals by delegating work to Karl, a capable coding agent.
+const ORCHESTRATOR_SYSTEM_PROMPT = `You are a strategic coordinator. You accomplish goals with quick local reconnaissance and focused delegation to Karl, a capable coding agent.
 
 ## How This Works
 
-You think about WHAT needs to happen. Karl figures out HOW to do it.
+You think about WHAT needs to happen. Use your read-only workspace tools for cheap context, then delegate substantial work to Karl.
 
-When you want something done, use the karl() tool and describe what you want in plain English. Karl has access to the filesystem, git, shell commands, and code editing - you don't need to specify the exact commands.
+When you want implementation, file mutation, shell commands, tests, builds, commits, or deeper investigation, use the karl() tool and describe what you want in plain English. Karl has access to the filesystem, git, shell commands, and code editing - you don't need to specify the exact commands.
 
 ## Examples of Good Delegation
 
@@ -67,13 +138,25 @@ You call: karl("run", "Add dark mode support to the application - determine the 
 ## Your Tools
 
 **karl(command, task)** - Delegate complex work to Karl
-- command: Usually "run" for most tasks. Also: "think" (analysis only), "review" (code review)
+- command: Use "run" for normal delegation. Only use a different command when the user has an explicitly configured Karl stack with that exact name.
 - task: Describe what you want done in natural language. Be clear about the goal, not the steps.
 
 **karl_cli(args)** - Manage karl configuration and coordination
 - Use for: stacks, models, skills, providers, and other meta-operations
 - Examples: "stacks list", "stacks create review", "models list", "skills list", "info"
 - NOT for actual work - use karl() to delegate grep, read, bash, code changes, etc.
+
+**list_files(path, depth)** - Quickly inspect directory structure
+- Use for: ls/tree style reconnaissance before deciding what to delegate.
+- Keep depth small unless the user asks for a broad inventory.
+
+**read_file(path, startLine, maxLines)** - Read a bounded slice of a text file
+- Use for: README, docs, indexes, manifests, and other small context checks.
+- Do not use it to manually perform large code review or implementation.
+
+**search_files(query, path, glob)** - Search workspace text with ripgrep
+- Use for: finding wiki pages, TODOs, feature names, symbols, or recent notes.
+- Prefer this over delegating a "grep for X" task to Karl.
 
 **ivo_context(keywords)** - Pre-load codebase context (optional)
 - Use when Karl needs broad context across many files
@@ -82,15 +165,177 @@ You call: karl("run", "Add dark mode support to the application - determine the 
 
 ## Key Principles
 
-1. **Delegate outcomes, not procedures** - Say "fix the login bug" not "run grep for login, then read the file, then edit line 42"
+1. **Use local tools for cheap context** - List directories, read indexes, and search text yourself when it helps frame the task.
 
-2. **Trust Karl's judgment** - Karl knows how to use git, read files, and write code. You focus on the goal.
+2. **Delegate outcomes, not procedures** - Say "fix the login bug" not "run grep for login, then read the file, then edit line 42"
 
-3. **Think in tasks, not commands** - One karl() call can accomplish a lot. Don't micromanage.
+3. **Trust Karl's judgment** - Karl knows how to use git, read files, and write code. You focus on the goal.
 
-4. **Be specific about WHAT, vague about HOW** - "Commit changes in logical groups" is good. "Run git add then git commit" is micromanaging.
+4. **Think in tasks, not commands** - One karl() call can accomplish a lot. Don't micromanage.
 
-5. **Don't gather context yourself** - If Karl needs codebase context, use ivo_context() to prepare it. Don't try to read files and pass their contents manually. Let the tools handle context gathering.`;
+5. **Be specific about WHAT, vague about HOW** - "Commit changes in logical groups" is good. "Run git add then git commit" is micromanaging.
+
+6. **Avoid noisy preambles** - If you are about to use a tool, either use it immediately or give one short orientation sentence. Do not repeat "I'd be happy to help" style filler.
+
+7. **Recover narrowly** - If a Karl delegation fails or hits a tool limit, do not retry the same broad task. Inspect with local tools, narrow the task, or explain the blocker.
+
+8. **Do not echo Karl verbatim** - After a successful Karl call, give the user a brief synthesis or next step. Do not repeat Karl's full output unless the user asks for raw details.`;
+
+const AGENT_CONTEXT_FILES = [
+  '.karl/agent.md',
+  '.karl/agent-context.md',
+  'WORKFLOW.md',
+  'AGENTS.md',
+  'CLAUDE.md',
+  'MAINTENANCE.md',
+  '.karl/context.md',
+];
+
+const MAX_AGENT_CONTEXT_CHARS = 64_000;
+const SHALLOW_AGENT_CONTEXT_NAMES = new Set(['AGENTS.md', 'CLAUDE.md', 'WORKFLOW.md', 'MAINTENANCE.md']);
+const AGENT_CONTEXT_IGNORED_DIRS = new Set([
+  '.git',
+  '.karl',
+  '.ivo',
+  '.codex',
+  '.agents',
+  '.claude',
+  '.next',
+  '.turbo',
+  '.cache',
+  'node_modules',
+  'dist',
+  'build',
+  'coverage',
+]);
+
+function agentContextPriority(file: string): number {
+  const name = basename(file);
+  if (file === '.karl/agent.md') return 0;
+  if (file === '.karl/agent-context.md') return 1;
+  if (file === 'WORKFLOW.md') return 2;
+  if (file === 'AGENTS.md') return 3;
+  if (file === 'CLAUDE.md') return 4;
+  if (file === 'MAINTENANCE.md') return 5;
+  if (file === '.karl/context.md') return 6;
+  if (name === 'WORKFLOW.md') return 20;
+  if (name === 'AGENTS.md') return 21;
+  if (name === 'CLAUDE.md') return 22;
+  if (name === 'MAINTENANCE.md') return 23;
+  return 100;
+}
+
+function pathDepth(file: string): number {
+  return file.split('/').length;
+}
+
+function normalizeRelPath(file: string): string {
+  return file.split(sep).join('/');
+}
+
+function discoverShallowAgentContextFiles(root: string, maxDepth = 3): string[] {
+  const found: string[] = [];
+
+  const walk = (dir: string, depth: number): void => {
+    if (depth > maxDepth) return;
+
+    let entries: Dirent[];
+    try {
+      entries = readdirSync(dir, { withFileTypes: true });
+    } catch {
+      return;
+    }
+
+    entries.sort((a, b) => a.name.localeCompare(b.name));
+
+    for (const entry of entries) {
+      const fullPath = join(dir, entry.name);
+      const rel = normalizeRelPath(relative(root, fullPath));
+      if (entry.isDirectory()) {
+        if (AGENT_CONTEXT_IGNORED_DIRS.has(entry.name)) continue;
+        walk(fullPath, depth + 1);
+      } else if (entry.isFile() && SHALLOW_AGENT_CONTEXT_NAMES.has(entry.name) && !AGENT_CONTEXT_FILES.includes(rel)) {
+        found.push(rel);
+      }
+    }
+  };
+
+  walk(root, 1);
+  return found.sort((a, b) =>
+    agentContextPriority(a) - agentContextPriority(b) ||
+    pathDepth(a) - pathDepth(b) ||
+    a.localeCompare(b)
+  );
+}
+
+export function discoverAgentContextFiles(cwd = process.cwd()): string[] {
+  const root = resolve(cwd);
+  const hasAgents = existsSync(join(root, 'AGENTS.md'));
+  const files: string[] = [];
+  const seen = new Set<string>();
+
+  for (const file of AGENT_CONTEXT_FILES) {
+    if (file === 'CLAUDE.md' && hasAgents) continue;
+    if (existsSync(join(root, file))) {
+      files.push(file);
+      seen.add(file);
+    }
+  }
+
+  for (const file of discoverShallowAgentContextFiles(root)) {
+    if (!seen.has(file)) {
+      files.push(file);
+      seen.add(file);
+    }
+  }
+
+  return files.sort((a, b) =>
+    agentContextPriority(a) - agentContextPriority(b) ||
+    pathDepth(a) - pathDepth(b) ||
+    a.localeCompare(b)
+  );
+}
+
+async function loadAgentProjectContext(cwd = process.cwd()): Promise<{ text: string; files: string[]; truncated: boolean }> {
+  const root = resolve(cwd);
+  const files = discoverAgentContextFiles(root);
+  const sections: string[] = [];
+  let usedChars = 0;
+  let truncated = false;
+
+  for (const file of files) {
+    const fullPath = join(root, file);
+    let content = '';
+    try {
+      content = (await fs.readFile(fullPath, 'utf8')).trim();
+    } catch {
+      continue;
+    }
+    if (!content) continue;
+
+    const header = `### ${file}\n`;
+    let section = `${header}${content}`;
+    const remaining = MAX_AGENT_CONTEXT_CHARS - usedChars;
+    if (remaining <= header.length + 200) {
+      truncated = true;
+      break;
+    }
+    if (section.length > remaining) {
+      section = `${header}${content.slice(0, remaining - header.length)}\n\n[truncated: use read_file for more of ${file}]`;
+      truncated = true;
+    }
+
+    sections.push(section);
+    usedChars += section.length;
+    if (truncated) break;
+  }
+
+  return {
+    files,
+    text: sections.join('\n\n'),
+    truncated,
+  };
+}
 
 
 // ============================================================================
@@ -251,10 +496,348 @@ function createIvoContextTool(emit: Emitter): ToolDefinition {
 }
 
 // ============================================================================
+// Read-only Workspace Tools
+// ============================================================================
+
+const SKIPPED_DIRS = new Set([
+  '.git',
+  '.next',
+  '.turbo',
+  '.cache',
+  '.pytest_cache',
+  '.ruff_cache',
+  'node_modules',
+  'dist',
+  'build',
+  'coverage',
+]);
+
+function resolveWorkspacePath(input: string | undefined): string {
+  const cwd = resolve(process.cwd());
+  const target = input && input.trim() ? input.trim() : '.';
+  const resolved = resolve(cwd, target);
+  if (resolved !== cwd && !resolved.startsWith(cwd + sep)) {
+    throw new Error(`Path is outside the current workspace: ${target}`);
+  }
+  return resolved;
+}
+
+function workspaceRelative(filePath: string): string {
+  const rel = relative(process.cwd(), filePath);
+  return rel || '.';
+}
+
+function clampNumber(value: unknown, fallback: number, min: number, max: number): number {
+  if (typeof value !== 'number' || !Number.isFinite(value)) return fallback;
+  return Math.max(min, Math.min(max, Math.floor(value)));
+}
+
+function firstTextLine(result: Array<{ type: 'text'; text: string } | { type: 'image'; source: { type: 'base64'; mediaType: string; data: string } }>): string {
+  const text = result.find((entry): entry is { type: 'text'; text: string } => entry.type === 'text')?.text ?? '';
+  return text.split(/\r?\n/).find(Boolean) ?? '(no output)';
+}
+
+function formatAgentToolDetail(toolName: string, args: any): string {
+  if (toolName === 'list_files') {
+    const path = typeof args.path === 'string' && args.path ? args.path : '.';
+    const depth = typeof args.depth === 'number' ? ` depth ${args.depth}` : '';
+    return `${path}${depth}`;
+  }
+  if (toolName === 'read_file') {
+    const path = typeof args.path === 'string' ? args.path : '';
+    const startLine = typeof args.startLine === 'number' ? `:${args.startLine}` : '';
+    return `${path}${startLine}`;
+  }
+  if (toolName === 'search_files') {
+    const query = typeof args.query === 'string' ? args.query : '';
+    const path = typeof args.path === 'string' && args.path ? args.path : '.';
+    return `${JSON.stringify(query)} in ${path}`;
+  }
+  return '';
+}
+
+async function collectDirectoryLines(params: {
+  root: string;
+  maxDepth: number;
+  maxEntries: number;
+  includeHidden: boolean;
+}): Promise<{ lines: string[]; truncated: boolean }> {
+  const lines: string[] = [];
+  let truncated = false;
+
+  const walk = async (dir: string, depth: number): Promise<void> => {
+    if (truncated) return;
+
+    const entries = await fs.readdir(dir, { withFileTypes: true });
+    entries.sort((a, b) => {
+      if (a.isDirectory() !== b.isDirectory()) return a.isDirectory() ? -1 : 1;
+      return a.name.localeCompare(b.name);
+    });
+
+    for (const entry of entries) {
+      if (truncated) return;
+      if (!params.includeHidden && entry.name.startsWith('.')) continue;
+      if (entry.isDirectory() && SKIPPED_DIRS.has(entry.name)) continue;
+
+      const fullPath = join(dir, entry.name);
+      const rel = workspaceRelative(fullPath);
+      lines.push(entry.isDirectory() ? `${rel}/` : rel);
+
+      if (lines.length >= params.maxEntries) {
+        truncated = true;
+        return;
+      }
+
+      if (entry.isDirectory() && depth < params.maxDepth) {
+        await walk(fullPath, depth + 1);
+      }
+    }
+  };
+
+  await walk(params.root, 1);
+  return { lines, truncated };
+}
+
+function createListFilesTool(): ToolDefinition {
+  return {
+    name: 'list_files',
+    description: 'List files and directories inside the current workspace. Read-only. Use for quick ls/tree style reconnaissance before delegating larger work.',
+    parameters: {
+      type: 'object',
+      properties: {
+        path: { type: 'string', description: 'Directory or file path relative to the workspace. Defaults to ".".' },
+        depth: { type: 'number', description: 'Directory recursion depth, 1-4. Defaults to 1.' },
+        maxEntries: { type: 'number', description: 'Maximum entries to return, 1-500. Defaults to 120.' },
+        includeHidden: { type: 'boolean', description: 'Include hidden files. Defaults to true, excluding heavy cache dirs.' }
+      }
+    },
+    execute: async (_toolCallId, params) => {
+      const input = params as { path?: string; depth?: number; maxEntries?: number; includeHidden?: boolean };
+      const resolved = resolveWorkspacePath(input.path);
+      const stat = await fs.stat(resolved);
+      const rel = workspaceRelative(resolved);
+
+      if (!stat.isDirectory()) {
+        return {
+          content: [{ type: 'text', text: `Path is a file: ${rel}\nSize: ${stat.size} bytes` }]
+        };
+      }
+
+      const maxDepth = clampNumber(input.depth, 1, 1, 4);
+      const maxEntries = clampNumber(input.maxEntries, 120, 1, 500);
+      const includeHidden = input.includeHidden ?? true;
+      const { lines, truncated } = await collectDirectoryLines({
+        root: resolved,
+        maxDepth,
+        maxEntries,
+        includeHidden,
+      });
+      const header = `Listed ${lines.length}${truncated ? '+' : ''} entries under ${rel} (depth ${maxDepth})`;
+      const body = lines.length > 0 ? lines.join('\n') : '(empty)';
+      return {
+        content: [{
+          type: 'text',
+          text: `${header}\n${body}${truncated ? `\n... truncated at ${maxEntries} entries` : ''}`
+        }]
+      };
+    }
+  };
+}
+
+function createReadFileTool(): ToolDefinition {
+  return {
+    name: 'read_file',
+    description: 'Read a bounded slice of a text file inside the current workspace. Read-only. Use for README files, wiki indexes, manifests, and focused context checks.',
+    parameters: {
+      type: 'object',
+      properties: {
+        path: { type: 'string', description: 'Text file path relative to the workspace.' },
+        startLine: { type: 'number', description: '1-based start line. Defaults to 1.' },
+        maxLines: { type: 'number', description: 'Maximum lines to return, 1-1000. Defaults to 200.' }
+      },
+      required: ['path']
+    },
+    execute: async (_toolCallId, params) => {
+      const input = params as { path: string; startLine?: number; maxLines?: number };
+      const resolved = resolveWorkspacePath(input.path);
+      const stat = await fs.stat(resolved);
+      if (!stat.isFile()) {
+        throw new Error(`Not a file: ${workspaceRelative(resolved)}`);
+      }
+      if (stat.size > 2_000_000) {
+        throw new Error(`File is too large for read_file (${stat.size} bytes): ${workspaceRelative(resolved)}`);
+      }
+
+      const content = await fs.readFile(resolved, 'utf8');
+      const lines = content.split(/\r?\n/);
+      const startLine = clampNumber(input.startLine, 1, 1, Math.max(1, lines.length));
+      const maxLines = clampNumber(input.maxLines, 200, 1, 1000);
+      const selected = lines.slice(startLine - 1, startLine - 1 + maxLines);
+      const endLine = startLine + selected.length - 1;
+      const numbered = selected
+        .map((line, index) => `${String(startLine + index).padStart(4, ' ')} | ${line}`)
+        .join('\n');
+      const truncated = endLine < lines.length;
+
+      return {
+        content: [{
+          type: 'text',
+          text: `Read ${workspaceRelative(resolved)} lines ${startLine}-${endLine} of ${lines.length}${truncated ? ' (more available)' : ''}\n${numbered}`
+        }]
+      };
+    }
+  };
+}
+
+async function runRipgrep(args: string[], signal?: AbortSignal): Promise<{ code: number | null; stdout: string; stderr: string; timedOut: boolean }> {
+  return new Promise((resolveResult) => {
+    const child = spawn('rg', args, {
+      stdio: ['ignore', 'pipe', 'pipe'],
+      env: { ...process.env, FORCE_COLOR: '0' }
+    });
+
+    let stdout = '';
+    let stderr = '';
+    let timedOut = false;
+    const maxBytes = 240_000;
+
+    const timeout = setTimeout(() => {
+      timedOut = true;
+      child.kill('SIGTERM');
+    }, 10_000);
+
+    const abortHandler = () => {
+      child.kill('SIGTERM');
+    };
+    signal?.addEventListener('abort', abortHandler);
+
+    child.stdout?.on('data', (data: Buffer) => {
+      if (Buffer.byteLength(stdout) < maxBytes) stdout += data.toString();
+    });
+
+    child.stderr?.on('data', (data: Buffer) => {
+      if (Buffer.byteLength(stderr) < maxBytes) stderr += data.toString();
+    });
+
+    child.on('close', (code) => {
+      clearTimeout(timeout);
+      signal?.removeEventListener('abort', abortHandler);
+      resolveResult({ code, stdout, stderr, timedOut });
+    });
+
+    child.on('error', (error) => {
+      clearTimeout(timeout);
+      signal?.removeEventListener('abort', abortHandler);
+      resolveResult({ code: null, stdout, stderr: error.message, timedOut });
+    });
+  });
+}
+
+function createSearchFilesTool(): ToolDefinition {
+  return {
+    name: 'search_files',
+    description: 'Search workspace text with ripgrep. Read-only. Use for finding wiki pages, TODOs, feature names, symbols, docs, or recent notes before delegating larger work.',
+    parameters: {
+      type: 'object',
+      properties: {
+        query: { type: 'string', description: 'Regex query by default; set literal=true for exact text.' },
+        path: { type: 'string', description: 'Directory or file path relative to the workspace. Defaults to ".".' },
+        glob: { type: 'string', description: 'Optional ripgrep glob, such as "*.md" or "morley-wiki/**/*.md".' },
+        literal: { type: 'boolean', description: 'Treat query as literal text instead of a regex. Defaults to false.' },
+        maxMatches: { type: 'number', description: 'Maximum result lines to return, 1-300. Defaults to 80.' }
+      },
+      required: ['query']
+    },
+    execute: async (_toolCallId, params, signal) => {
+      const input = params as { query: string; path?: string; glob?: string; literal?: boolean; maxMatches?: number };
+      if (!input.query || !input.query.trim()) {
+        throw new Error('search_files requires a non-empty query');
+      }
+
+      const resolved = resolveWorkspacePath(input.path);
+      const maxMatches = clampNumber(input.maxMatches, 80, 1, 300);
+      const args = [
+        '--line-number',
+        '--column',
+        '--hidden',
+        '--smart-case',
+        '--color',
+        'never',
+        '--glob',
+        '!.git/**',
+        '--glob',
+        '!node_modules/**',
+        '--glob',
+        '!dist/**',
+        '--glob',
+        '!*.bun-build',
+      ];
+
+      if (input.literal) args.push('--fixed-strings');
+      if (input.glob) args.push('--glob', input.glob);
+      args.push(input.query, resolved);
+
+      const result = await runRipgrep(args, signal);
+      if (result.code === null) {
+        return {
+          content: [{ type: 'text', text: `search_files failed: ${result.stderr || 'could not spawn rg'}` }],
+          isError: true
+        };
+      }
+      if (result.timedOut) {
+        return {
+          content: [{ type: 'text', text: `search_files timed out after 10s for ${JSON.stringify(input.query)}` }],
+          isError: true
+        };
+      }
+      if (result.code === 1) {
+        return {
+          content: [{ type: 'text', text: `No matches for ${JSON.stringify(input.query)} in ${workspaceRelative(resolved)}` }]
+        };
+      }
+      if (result.code !== 0) {
+        return {
+          content: [{ type: 'text', text: `search_files failed: ${result.stderr || `rg exited with ${result.code}`}` }],
+          isError: true
+        };
+      }
+
+      const lines = result.stdout.trim().split(/\r?\n/).filter(Boolean);
+      const selected = lines.slice(0, maxMatches);
+      const truncated = lines.length > selected.length;
+      return {
+        content: [{
+          type: 'text',
+          text: `Found ${lines.length}${truncated ? '+' : ''} matches for ${JSON.stringify(input.query)} in ${workspaceRelative(resolved)}\n${selected.join('\n')}${truncated ? `\n... truncated at ${maxMatches} matches` : ''}`
+        }]
+      };
+    }
+  };
+}
+
+// ============================================================================
 // Karl Tool
 // ============================================================================
 
-function createKarlTool(emit: Emitter, signal?: AbortSignal): ToolDefinition {
+const BUILTIN_KARL_COMMANDS = new Set([
+  'run',
+  'ask',
+  'do',
+  'execute',
+  'exec',
+  'continue',
+  'cont',
+  'followup',
+  'follow-up',
+  'chain',
+]);
+
+function createKarlTool(
+  emit: Emitter,
+  karlInvocation: KarlInvocation,
+  allowedCommands: Set<string>,
+  signal?: AbortSignal
+): ToolDefinition {
   return {
     name: 'karl',
     description: 'Delegate a task to Karl, a capable coding agent. Describe what you want done in natural language - Karl handles the details. Karl can read/write files, run shell commands, use git, and edit code.',
@@ -263,7 +846,7 @@ function createKarlTool(emit: Emitter, signal?: AbortSignal): ToolDefinition {
       properties: {
         command: {
           type: 'string',
-          description: 'Usually "run". Use "think" for analysis without changes, "review" for code review.'
+          description: 'Use "run" unless the user has configured an exact Karl stack name.'
         },
         task: {
           type: 'string',
@@ -282,18 +865,19 @@ function createKarlTool(emit: Emitter, signal?: AbortSignal): ToolDefinition {
       required: ['command', 'task']
     },
     execute: async (_toolCallId, params) => {
-      const { command, task, context_id, flags = [] } = params as {
+      const { command: requestedCommand, task, context_id, flags = [] } = params as {
         command: string;
         task: string;
         context_id?: string;
         flags?: string[];
       };
+      const command = allowedCommands.has(requestedCommand) ? requestedCommand : 'run';
       const startTime = Date.now();
 
       emit({ type: 'karl_start', command, task });
 
       return new Promise((resolve) => {
-        const args = [command, task, ...flags];
+        const args = [...karlInvocation.argsPrefix, command, task, ...flags];
 
         // Add context file if context_id provided (loads from .ivo/contexts/)
         if (context_id) {
@@ -301,7 +885,7 @@ function createKarlTool(emit: Emitter, signal?: AbortSignal): ToolDefinition {
           args.push('--context-file', contextPath);
         }
 
-        const child = spawn('karl', args, {
+        const child = spawn(karlInvocation.command, args, {
           stdio: ['pipe', 'pipe', 'pipe'],
           env: { ...process.env, FORCE_COLOR: '0' }
         });
@@ -347,7 +931,7 @@ function createKarlTool(emit: Emitter, signal?: AbortSignal): ToolDefinition {
           emit({ type: 'karl_end', result: error.message, success: false, durationMs });
 
           resolve({
-            content: [{ type: 'text', text: `Error spawning karl: ${error.message}` }],
+            content: [{ type: 'text', text: `Error spawning Karl via ${karlInvocation.display}: ${error.message}` }],
             isError: true
           });
         });
@@ -360,7 +944,7 @@ function createKarlTool(emit: Emitter, signal?: AbortSignal): ToolDefinition {
 // Karl CLI Tool (configuration and coordination)
 // ============================================================================
 
-function createKarlCliTool(emit: Emitter, signal?: AbortSignal): ToolDefinition {
+function createKarlCliTool(emit: Emitter, karlInvocation: KarlInvocation, signal?: AbortSignal): ToolDefinition {
   return {
     name: 'karl_cli',
     description: 'Manage karl configuration and coordination. Use for stacks, models, skills, providers, and meta-operations. NOT for actual work - use karl() to delegate grep, read, bash, code changes.',
@@ -379,13 +963,13 @@ function createKarlCliTool(emit: Emitter, signal?: AbortSignal): ToolDefinition 
       const startTime = Date.now();
 
       // Parse args string into array (simple split, handles quoted strings later if needed)
-      const argList = args.match(/(?:[^\s"]+|"[^"]*")+/g) || [];
+      const argList = splitCommandLine(args);
       const command = argList[0] || 'help';
 
       emit({ type: 'karl_start', command, task: args });
 
       return new Promise((resolve) => {
-        const child = spawn('karl', argList, {
+        const child = spawn(karlInvocation.command, [...karlInvocation.argsPrefix, ...argList], {
           stdio: ['pipe', 'pipe', 'pipe'],
           env: { ...process.env, FORCE_COLOR: '0' }
         });
@@ -431,7 +1015,7 @@ function createKarlCliTool(emit: Emitter, signal?: AbortSignal): ToolDefinition 
           emit({ type: 'karl_end', result: error.message, success: false, durationMs });
 
           resolve({
-            content: [{ type: 'text', text: `Error spawning karl: ${error.message}` }],
+            content: [{ type: 'text', text: `Error spawning Karl via ${karlInvocation.display}: ${error.message}` }],
             isError: true
           });
         });
@@ -449,9 +1033,11 @@ export class Orchestrator {
   private listeners = new Set<Listener>();
   private abortController: AbortController | null = null;
   private config: KarlConfig;
+  private karlInvocation: KarlInvocation;
 
-  constructor(config: KarlConfig) {
+  constructor(config: KarlConfig, options: OrchestratorOptions = {}) {
     this.config = config;
+    this.karlInvocation = options.karlInvocation ?? resolveKarlInvocation();
 
     const resolved = resolveAgentModel(config);
     this.state = {
@@ -486,6 +1072,46 @@ export class Orchestrator {
         // Ignore listener errors
       }
     }
+  }
+
+  private async getAllowedKarlCommands(): Promise<Set<string>> {
+    const stackNames = new Set(Object.keys(this.config.stacks ?? {}));
+    try {
+      const manager = new StackManager(this.config);
+      const stacks = await manager.listStacks();
+      for (const stack of stacks) {
+        stackNames.add(stack.name);
+      }
+    } catch {
+      // Stack discovery is advisory for the coordinator prompt/tool schema.
+    }
+
+    return new Set([
+      ...BUILTIN_KARL_COMMANDS,
+      ...stackNames,
+    ]);
+  }
+
+  private async buildSystemPrompt(): Promise<string> {
+    const projectContext = await loadAgentProjectContext();
+    if (!projectContext.text) {
+      return ORCHESTRATOR_SYSTEM_PROMPT;
+    }
+
+    const fileList = projectContext.files.join(', ');
+    const truncationNote = projectContext.truncated
+      ? '\n\nProject context was truncated. Use read_file when you need a deeper section.'
+      : '';
+
+    return `${ORCHESTRATOR_SYSTEM_PROMPT}
+
+## Project Operating Context
+
+The following local project guidance is loaded before each turn. Treat it as project-specific orchestration law when it is more specific than the generic Karl Agent instructions.
+
+Loaded files: ${fileList}${truncationNote}
+
+${projectContext.text}`;
   }
 
   /**
@@ -548,11 +1174,16 @@ export class Orchestrator {
       // Tools: ivo_context, karl (agent), and karl_cli (utility)
       const emit = (event: OrchestratorEvent) => this.emit(event);
       const signal = this.abortController.signal;
+      const localToolStarts = new Map<string, number>();
+      const allowedKarlCommands = await this.getAllowedKarlCommands();
 
       const tools = [
+        createListFilesTool(),
+        createReadFileTool(),
+        createSearchFilesTool(),
         createIvoContextTool(emit),
-        createKarlTool(emit, signal),
-        createKarlCliTool(emit, signal)
+        createKarlTool(emit, this.karlInvocation, allowedKarlCommands, signal),
+        createKarlCliTool(emit, this.karlInvocation, signal)
       ];
 
       // Build full message history for agent loop
@@ -564,7 +1195,7 @@ export class Orchestrator {
         : userMessage;
 
       const loop = agentLoop(
-        ORCHESTRATOR_SYSTEM_PROMPT,
+        await this.buildSystemPrompt(),
         fullPrompt,
         tools,
         loopConfig
@@ -583,6 +1214,31 @@ export class Orchestrator {
         const event = value;
 
         switch (event.type) {
+          case 'tool_execution_start':
+            if (!['karl', 'karl_cli', 'ivo_context'].includes(event.toolName)) {
+              localToolStarts.set(event.toolCallId, Date.now());
+              this.emit({
+                type: 'agent_tool_start',
+                tool: event.toolName,
+                detail: formatAgentToolDetail(event.toolName, event.args)
+              });
+            }
+            break;
+
+          case 'tool_execution_end':
+            if (!['karl', 'karl_cli', 'ivo_context'].includes(event.toolName)) {
+              const start = localToolStarts.get(event.toolCallId) ?? Date.now();
+              localToolStarts.delete(event.toolCallId);
+              this.emit({
+                type: 'agent_tool_end',
+                tool: event.toolName,
+                summary: firstTextLine(event.result.content).slice(0, 160),
+                success: !event.isError,
+                durationMs: Date.now() - start
+              });
+            }
+            break;
+
           case 'text_delta':
             responseText += event.delta;
             this.emit({ type: 'thinking', text: event.delta });

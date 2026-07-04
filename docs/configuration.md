@@ -33,6 +33,11 @@ Project-level `.karl.json` overrides global config.
       "baseUrl": "https://openrouter.ai/api/v1",
       "apiKey": "${OPENROUTER_API_KEY}"
     },
+    "wafer": {
+      "type": "openai",
+      "baseUrl": "https://pass.wafer.ai/v1",
+      "apiKey": "${WAFER_API_KEY}"
+    },
     "anthropic": {
       "type": "anthropic",
       "apiKey": "${ANTHROPIC_API_KEY}"

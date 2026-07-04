@@ -10,7 +10,8 @@ import { homedir } from 'os';
 import { spawnSync } from 'child_process';
 import { createInterface } from 'readline';
 import {
-  loadOAuthCredentials,
+  getOAuthStorageKey,
+  getProviderOAuthToken,
   removeOAuthCredentials,
   runLoginFlow
 } from '../oauth.js';
@@ -52,6 +53,16 @@ const PROVIDER_TEMPLATES: Record<string, {
     config: { type: 'openai', apiKey: '${OPENAI_API_KEY}' },
     envVar: 'OPENAI_API_KEY',
     description: 'OpenAI API',
+  },
+  wafer: {
+    type: 'openai',
+    config: {
+      type: 'openai',
+      baseUrl: 'https://pass.wafer.ai/v1',
+      apiKey: '${WAFER_API_KEY}',
+    },
+    envVar: 'WAFER_API_KEY',
+    description: 'Wafer.ai serverless models (OpenAI-compatible)',
   },
   antigravity: {
     type: 'openai',
@@ -206,20 +217,31 @@ function prompt(rl: ReturnType<typeof createInterface>, question: string): Promi
 /**
  * Get provider status (configured, authenticated)
  */
-function getProviderStatus(providerKey: string, providerConfig: ProviderConfig): {
+async function getProviderStatus(providerKey: string, providerConfig: ProviderConfig): Promise<{
   configured: boolean;
   authenticated: boolean;
   authMethod: string;
-} {
+  detail?: string;
+}> {
   const isOAuth = providerConfig.authType === 'oauth';
 
   if (isOAuth) {
-    const oauthKey = providerKey === 'claude-pro-max' ? 'anthropic' : providerKey;
-    const creds = loadOAuthCredentials(oauthKey);
+    const oauthKey = getOAuthStorageKey(providerKey);
+    if (oauthKey !== 'anthropic') {
+      return {
+        configured: true,
+        authenticated: false,
+        authMethod: 'OAuth',
+        detail: 'unsupported',
+      };
+    }
+
+    const token = await getProviderOAuthToken(providerKey);
     return {
       configured: true,
-      authenticated: creds !== null,
+      authenticated: token !== null,
       authMethod: 'OAuth',
+      detail: token ? undefined : 'login required',
     };
   } else {
     const apiKey = providerConfig.apiKey;
@@ -253,9 +275,9 @@ export async function listProviders() {
   console.log(`Found ${entries.length} provider${entries.length === 1 ? '' : 's'}:\n`);
 
   for (const [key, providerConfig] of entries) {
-    const status = getProviderStatus(key, providerConfig);
+    const status = await getProviderStatus(key, providerConfig);
     const statusIcon = status.authenticated ? '✓' : '○';
-    const statusText = status.authenticated ? 'ready' : 'not authenticated';
+    const statusText = status.detail ?? (status.authenticated ? 'ready' : 'not authenticated');
 
     console.log(`${statusIcon} ${key.padEnd(20)} ${status.authMethod.padEnd(15)} ${statusText}`);
   }
@@ -279,12 +301,12 @@ export async function showProvider(providerKey: string) {
     process.exit(1);
   }
 
-  const status = getProviderStatus(providerKey, providerConfig);
+  const status = await getProviderStatus(providerKey, providerConfig);
 
   console.log(`# ${providerKey}\n`);
   console.log(`**Type:** ${providerConfig.type}`);
   console.log(`**Auth Method:** ${status.authMethod}`);
-  console.log(`**Status:** ${status.authenticated ? 'Authenticated ✓' : 'Not authenticated'}`);
+  console.log(`**Status:** ${status.authenticated ? 'Authenticated ✓' : status.detail ?? 'Not authenticated'}`);
 
   if (providerConfig.baseUrl) {
     console.log(`**Base URL:** ${providerConfig.baseUrl}`);
@@ -533,19 +555,35 @@ export async function loginProvider(providerKey?: string) {
     process.exit(1);
   }
 
-  await runLoginFlow();
+  const oauthKey = getOAuthStorageKey(providerKey);
+  if (oauthKey !== 'anthropic') {
+    console.error(`Provider "${providerKey}" is configured for OAuth, but Karl only has a built-in OAuth login flow for Claude Pro/Max providers right now.`);
+    process.exit(1);
+  }
+
+  await runLoginFlow(providerKey);
 }
 
 /**
  * Logout from an OAuth provider
  */
 export async function logoutProvider(providerKey: string) {
-  if (!providerExists(providerKey)) {
+  const cwd = process.cwd();
+  const config = await loadConfig(cwd);
+  const providerConfig = config.providers?.[providerKey];
+  const isLegacyAnthropicLogout = providerKey === 'anthropic';
+
+  if (!providerConfig && !isLegacyAnthropicLogout) {
     console.error(`Provider "${providerKey}" not found.`);
     process.exit(1);
   }
 
-  const oauthKey = providerKey === 'claude-pro-max' ? 'anthropic' : providerKey;
+  if (!isLegacyAnthropicLogout && providerConfig?.authType !== 'oauth') {
+    console.error(`Provider "${providerKey}" uses API key authentication, not OAuth.`);
+    process.exit(1);
+  }
+
+  const oauthKey = getOAuthStorageKey(providerKey);
   removeOAuthCredentials(oauthKey);
 
   console.log(`✓ Logged out from "${providerKey}".`);

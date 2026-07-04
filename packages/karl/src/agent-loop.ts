@@ -115,6 +115,112 @@ function hashArgs(args: any): string {
 
 const REPETITIVE_CALL_THRESHOLD = 3;
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return !!value && typeof value === 'object' && !Array.isArray(value);
+}
+
+function cleanErrorString(value: string): string {
+  return value.replace(/\s+/g, ' ').trim();
+}
+
+function collectErrorStrings(value: unknown, seen = new Set<unknown>(), depth = 0): string[] {
+  if (value === null || value === undefined || seen.has(value) || depth > 5) {
+    return [];
+  }
+  seen.add(value);
+
+  if (typeof value === 'string') {
+    const cleaned = cleanErrorString(value);
+    if (!cleaned) return [];
+    if ((cleaned.startsWith('{') && cleaned.endsWith('}')) || (cleaned.startsWith('[') && cleaned.endsWith(']'))) {
+      try {
+        return [cleaned, ...collectErrorStrings(JSON.parse(cleaned), seen, depth + 1)];
+      } catch {
+        return [cleaned];
+      }
+    }
+    return [cleaned];
+  }
+
+  if (Array.isArray(value)) {
+    return value.flatMap((entry) => collectErrorStrings(entry, seen, depth + 1));
+  }
+
+  if (!isRecord(value)) {
+    return [];
+  }
+
+  const priorityKeys = [
+    'message',
+    'detail',
+    'details',
+    'reason',
+    'raw',
+    'error',
+    'metadata',
+    'code',
+    'type',
+  ];
+  const strings: string[] = [];
+  const handled = new Set<string>();
+
+  for (const key of priorityKeys) {
+    if (key in value) {
+      handled.add(key);
+      strings.push(...collectErrorStrings(value[key], seen, depth + 1));
+    }
+  }
+
+  for (const [key, entry] of Object.entries(value)) {
+    if (handled.has(key)) continue;
+    strings.push(...collectErrorStrings(entry, seen, depth + 1));
+  }
+
+  return strings;
+}
+
+function formatProviderError(prefix: string, status: number | null, errorText: string): string {
+  const fallback = status ? `${prefix} ${status}` : prefix;
+  if (!errorText.trim()) return fallback;
+
+  try {
+    const parsed = JSON.parse(errorText);
+    const strings = collectErrorStrings(parsed);
+    const unique = Array.from(new Set(strings))
+      .filter((entry) => entry.length > 0)
+      .filter((entry, index, all) => {
+        if (entry.length > 240) return true;
+        return !all.some((other, otherIndex) =>
+          otherIndex !== index &&
+          other.length > entry.length &&
+          other.includes(entry)
+        );
+      })
+      .slice(0, 4);
+
+    if (unique.length > 0) {
+      return `${fallback}: ${unique.join(' | ')}`.slice(0, 1600);
+    }
+
+    return `${fallback}: ${JSON.stringify(parsed).slice(0, 1200)}`;
+  } catch {
+    return `${fallback}: ${cleanErrorString(errorText).slice(0, 1200)}`;
+  }
+}
+
+function formatProviderErrorPayload(prefix: string, payload: unknown): string {
+  if (typeof payload === 'string') {
+    return formatProviderError(prefix, null, payload);
+  }
+
+  const strings = collectErrorStrings(payload);
+  const unique = Array.from(new Set(strings)).filter(Boolean).slice(0, 4);
+  if (unique.length > 0) {
+    return `${prefix}: ${unique.join(' | ')}`.slice(0, 1600);
+  }
+  return `${prefix}: ${JSON.stringify(payload).slice(0, 1200)}`;
+}
+
 export async function* agentLoop(
   systemPrompt: string,
   userMessage: string,
@@ -371,14 +477,7 @@ async function* streamOpenAI(
 
   if (!response.ok) {
     const errorText = await response.text();
-    let errorMessage = `API error ${response.status}`;
-    try {
-      const errorJson = JSON.parse(errorText);
-      errorMessage = errorJson.error?.message || errorJson.message || errorMessage;
-    } catch {
-      if (errorText) errorMessage += `: ${errorText.slice(0, 200)}`;
-    }
-    yield { type: 'error', error: errorMessage };
+    yield { type: 'error', error: formatProviderError('API error', response.status, errorText) };
     return;
   }
 
@@ -413,6 +512,11 @@ async function* streamOpenAI(
 
         try {
           const chunk = JSON.parse(data);
+          if (chunk.error) {
+            yield { type: 'error', error: formatProviderErrorPayload('Provider stream error', chunk.error) };
+            return;
+          }
+
           const choice = chunk.choices?.[0];
           const delta = choice?.delta;
 
@@ -692,14 +796,7 @@ async function* streamAnthropic(
 
   if (!response.ok) {
     const errorText = await response.text();
-    let errorMessage = `Anthropic API error ${response.status}`;
-    try {
-      const errorJson = JSON.parse(errorText);
-      errorMessage = errorJson.error?.message || errorJson.message || errorMessage;
-    } catch {
-      if (errorText) errorMessage += `: ${errorText.slice(0, 200)}`;
-    }
-    yield { type: 'error', error: errorMessage };
+    yield { type: 'error', error: formatProviderError('Anthropic API error', response.status, errorText) };
     return;
   }
 
@@ -827,7 +924,7 @@ async function* streamAnthropic(
               break;
 
             case 'error':
-              yield { type: 'error', error: event.error?.message || 'Unknown Anthropic error' };
+              yield { type: 'error', error: formatProviderErrorPayload('Anthropic stream error', event.error ?? event) };
               break;
           }
         } catch {

@@ -2,11 +2,19 @@ import * as readline from 'readline';
 import path from 'path';
 import { promises as fs } from 'fs';
 import { execSync } from 'child_process';
-import { Orchestrator, type OrchestratorEvent } from '../orchestrator.js';
+import {
+  Orchestrator,
+  discoverAgentContextFiles,
+  resolveKarlInvocation,
+  type OrchestratorEvent
+} from '../orchestrator.js';
 import type { KarlConfig } from '../types.js';
 import pc from 'picocolors';
 import { getSpinnerFrame, highlight, detectVisuals } from '../utils/visuals.js';
 import { formatDuration, resolveHomePath } from '../utils.js';
+
+const AGENT_ORIENTATION_VERSION = 1;
+const AGENT_ORIENTATION_STATE = path.join('.karl', 'agent-state.json');
 
 // Format token count with K/M suffixes
 function formatTokens(tokens: number): string {
@@ -37,27 +45,169 @@ function getProjectName(): string {
   return path.basename(process.cwd());
 }
 
+function formatTaskTitle(task: string, maxLength = 96): string {
+  const singleLine = task.replace(/\s+/g, ' ').trim();
+  if (singleLine.length <= maxLength) return singleLine;
+  return `${singleLine.slice(0, maxLength - 3)}...`;
+}
+
+async function pathExists(filePath: string): Promise<boolean> {
+  try {
+    await fs.access(filePath);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+async function readContextTitle(file: string): Promise<string> {
+  try {
+    const content = await fs.readFile(path.join(process.cwd(), file), 'utf8');
+    const title = content.split(/\r?\n/).find((line) => /^#\s+/.test(line.trim()));
+    if (title) return title.replace(/^#\s+/, '').trim();
+
+    const status = content.split(/\r?\n/).find((line) => /^status:/i.test(line.trim()));
+    if (status) return status.trim();
+  } catch {
+    // A missing title should not block startup.
+  }
+  return 'project guidance';
+}
+
+function askOrientation(question: string): Promise<string> {
+  const prompt = readline.createInterface({
+    input: process.stdin,
+    output: process.stdout,
+    terminal: true
+  });
+
+  return new Promise((resolve) => {
+    prompt.question(question, (answer) => {
+      prompt.close();
+      resolve(answer.trim());
+    });
+  });
+}
+
+async function writeOrientationState(contextFiles: string[]): Promise<void> {
+  const statePath = path.join(process.cwd(), AGENT_ORIENTATION_STATE);
+  await fs.mkdir(path.dirname(statePath), { recursive: true });
+  await fs.writeFile(statePath, JSON.stringify({
+    version: AGENT_ORIENTATION_VERSION,
+    confirmedAt: new Date().toISOString(),
+    contextFiles,
+  }, null, 2) + '\n');
+}
+
+async function maybeRunAgentOrientation(contextFiles: string[]): Promise<void> {
+  if (!process.stdin.isTTY || !process.stdout.isTTY) return;
+
+  const statePath = path.join(process.cwd(), AGENT_ORIENTATION_STATE);
+  if (await pathExists(statePath)) return;
+
+  const project = getProjectName();
+  console.log('');
+  console.log(pc.bold(`First time with Karl Agent in ${project}`));
+  console.log(pc.dim('Ok, here is the situation as I understand it:'));
+
+  if (contextFiles.length === 0) {
+    console.log(`  ${pc.yellow('!')} I did not find project-level agent guidance.`);
+    console.log(`  ${pc.dim('Add .karl/agent.md, AGENTS.md, WORKFLOW.md, or MAINTENANCE.md if this project has an operating contract.')}`);
+  } else {
+    console.log(`  ${pc.green('✓')} I will load these project guidance files before each turn:`);
+    for (const file of contextFiles) {
+      const title = await readContextTitle(file);
+      console.log(`    - ${file}${pc.dim(` — ${title}`)}`);
+    }
+  }
+
+  console.log(`  ${pc.green('✓')} I will use cheap read-only tools for orientation, then delegate real work to Karl.`);
+  console.log(`  ${pc.green('✓')} I will treat .karl/agent.md as the strongest project-specific coordinator note if you add one.`);
+  console.log('');
+
+  const answer = (await askOrientation('Does this look good? [Y/n] ')).toLowerCase();
+  if (answer === '' || answer === 'y' || answer === 'yes') {
+    try {
+      await writeOrientationState(contextFiles);
+      console.log(pc.dim(`Saved orientation approval to ${AGENT_ORIENTATION_STATE}`));
+    } catch (error) {
+      console.log(pc.dim(`Could not save orientation approval: ${(error as Error).message}`));
+    }
+    console.log('');
+    return;
+  }
+
+  console.log(pc.dim('No problem. I will continue without saving approval.'));
+  console.log(pc.dim('Add or edit .karl/agent.md to teach Karl Agent the project-specific coordinator brief.'));
+  console.log('');
+}
+
 interface AgentOptions {
   plain?: boolean;
   visuals?: string;
 }
 
+export function printAgentHelp(): void {
+  console.log(`Karl Agent
+
+Usage:
+  karl agent [--plain] [--visuals MODE]
+
+Interactive coordinator for longer Karl sessions.
+
+Agent-side tools:
+  list_files     Quick read-only directory listings
+  read_file      Bounded read-only text file slices
+  search_files   Read-only ripgrep search
+  ivo_context    Broad context packs for large codebase questions
+  karl           Delegate implementation, shell work, tests, git, and edits
+  karl_cli       Manage Karl config, stacks, models, providers, and skills
+
+Project context:
+  Loads .karl/agent.md, WORKFLOW.md, AGENTS.md/CLAUDE.md, MAINTENANCE.md, and .karl/context.md when present.
+  On first interactive run in a project, asks you to confirm the discovered operating context.
+
+Session commands:
+  /reset         Clear conversation history
+  /calls         List nested Karl calls
+  raw N          Show raw output for nested Karl call N
+  /help          Show in-session help
+  /exit          Quit
+
+Environment:
+  KARL_AGENT_COMMAND='bun /path/to/cli.ts' karl agent
+`);
+}
+
 export async function handleAgentRepl(config: KarlConfig, options: AgentOptions = {}): Promise<void> {
   // Session auto-save setup
   const sessionDir = resolveHomePath('~/.config/karl/agent');
-  await fs.mkdir(sessionDir, { recursive: true });
   const sessionId = `agent-${new Date().toISOString().slice(0, 19).replace(/:/g, '-')}`;
-  const sessionFile = path.join(sessionDir, `${sessionId}.md`);
-  console.log(pc.gray(`📝 Session: ${path.basename(sessionFile)} (full log: ${sessionFile})`));
+  let sessionFile: string | null = path.join(sessionDir, `${sessionId}.md`);
+  try {
+    await fs.mkdir(sessionDir, { recursive: true });
+    await fs.writeFile(sessionFile, `# Karl Agent Session ${sessionId}\n\n`);
+    console.log(pc.gray(`📝 Session: ${path.basename(sessionFile)} (full log: ${sessionFile})`));
+  } catch (error) {
+    sessionFile = null;
+    console.log(pc.gray(`Session log disabled: ${(error as Error).message}`));
+  }
 
-  const orchestrator = new Orchestrator(config);
+  const karlInvocation = resolveKarlInvocation();
+  const orchestrator = new Orchestrator(config, { karlInvocation });
   const state = orchestrator.snapshot;
 
   const override = options.plain ? 'plain' : options.visuals || 'auto';
   const visualsMode = detectVisuals(override);
 
   console.log(`${pc.bold('Karl Agent')} ${pc.dim(`(${state.model} via ${state.provider})`)}`);
-  console.log(pc.dim('Commands: /reset, /exit, /calls, raw N, Ctrl+C'));
+  console.log(pc.dim(`Karl command: ${karlInvocation.display}`));
+  const contextFiles = discoverAgentContextFiles();
+  if (contextFiles.length > 0) {
+    console.log(pc.dim(`Project context: ${contextFiles.join(', ')}`));
+  }
+  await maybeRunAgentOrientation(contextFiles);
+  console.log(pc.dim('Commands: /reset, /exit, /calls, /help, raw N, Ctrl+C'));
   console.log('');
 
   const rl = readline.createInterface({
@@ -75,9 +225,26 @@ export async function handleAgentRepl(config: KarlConfig, options: AgentOptions 
   let callStartTime = 0;
   let currentCallInfo = '';
   let totalTokens = 0;
+  let streamedAssistantText = '';
+  let assistantLineOpen = false;
 
-  // Save session header
-  await fs.writeFile(sessionFile, `# Karl Agent Session ${sessionId}\n\n`);
+  const resetAssistantStream = () => {
+    streamedAssistantText = '';
+    assistantLineOpen = false;
+  };
+
+  const writeAssistantDelta = (text: string) => {
+    process.stdout.write(text);
+    streamedAssistantText += text;
+    assistantLineOpen = !text.endsWith('\n');
+  };
+
+  const closeAssistantLine = () => {
+    if (assistantLineOpen) {
+      process.stdout.write('\n');
+      assistantLineOpen = false;
+    }
+  };
 
   rl.on('SIGINT', () => {
     if (spinnerInterval) {
@@ -98,10 +265,11 @@ export async function handleAgentRepl(config: KarlConfig, options: AgentOptions 
   orchestrator.subscribe((event: OrchestratorEvent) => {
     switch (event.type) {
       case 'thinking':
-        process.stdout.write(pc.dim(event.text));
+        writeAssistantDelta(event.text);
         break;
 
       case 'ivo_start': {
+        closeAssistantLine();
         // Status bar separator for ivo
         const termWidth = process.stdout.columns || 80;
         const project = getProjectName();
@@ -110,7 +278,7 @@ export async function handleAgentRepl(config: KarlConfig, options: AgentOptions 
 
         const parts: string[] = ['ivo'];
         if (branch) parts.push(branch);
-        parts.push(project);
+        if (project !== 'ivo') parts.push(project);
         parts.push(`${tokensStr} tokens`);
 
         const info = parts.join(' ');
@@ -134,9 +302,22 @@ export async function handleAgentRepl(config: KarlConfig, options: AgentOptions 
         break;
       }
 
+      case 'agent_tool_start':
+        closeAssistantLine();
+        console.log(`${pc.blue('▸')} ${pc.blue(event.tool)} ${pc.dim(event.detail)}`);
+        break;
+
+      case 'agent_tool_end': {
+        const statusIcon = event.success ? pc.green('✓') : pc.red('✗');
+        console.log(`${statusIcon} ${pc.dim(event.tool)} ${pc.dim(event.summary)} ${pc.dim(`[${formatDuration(event.durationMs)}]`)}`);
+        break;
+      }
+
       case 'karl_start': {
+        closeAssistantLine();
         currentBuffer = '';
-        currentCallInfo = `${event.command} "${event.task}"`;
+        const taskTitle = formatTaskTitle(event.task);
+        currentCallInfo = `${event.command} "${taskTitle}"`;
         callStartTime = Date.now();
         callNum++;
 
@@ -148,7 +329,7 @@ export async function handleAgentRepl(config: KarlConfig, options: AgentOptions 
 
         const parts: string[] = ['karl'];
         if (branch) parts.push(branch);
-        parts.push(project);
+        if (project !== 'karl') parts.push(project);
         parts.push(`${tokensStr} tokens`);
 
         const info = parts.join(' ');
@@ -160,7 +341,7 @@ export async function handleAgentRepl(config: KarlConfig, options: AgentOptions 
         console.log('\n' + statusLine);
 
         // Header: ▸ karl run "task"
-        const header = `${pc.cyan('▸')} ${pc.cyan('karl')} ${event.command} ${pc.dim(`"${event.task}"`)}`;
+        const header = `${pc.cyan('▸')} ${pc.cyan('karl')} ${event.command} ${pc.dim(`"${taskTitle}"`)}`;
         console.log(header);
 
         // Spinner on next line
@@ -202,15 +383,24 @@ export async function handleAgentRepl(config: KarlConfig, options: AgentOptions 
 
         // Append to session MD with embedded raw
         const mdKarl = `\n### Karl Call ${callNum}: ${currentCallInfo}\n\`\`\`\n${currentBuffer.trim()}\n\`\`\`\n\n`;
-        fs.appendFile(sessionFile, mdKarl).catch(console.error);
+        if (sessionFile) {
+          fs.appendFile(sessionFile, mdKarl).catch(console.error);
+        }
         break;
       }
 
       case 'response':
-        console.log(`\n${event.text}`);
+        if (event.text.trim() && !streamedAssistantText.includes(event.text.trim())) {
+          closeAssistantLine();
+          console.log(`\n${event.text}`);
+        } else {
+          closeAssistantLine();
+        }
         // Append response to MD
         const mdResp = `\n## Agent\n\n${event.text}\n\n---\n\n`;
-        fs.appendFile(sessionFile, mdResp).catch(console.error);
+        if (sessionFile) {
+          fs.appendFile(sessionFile, mdResp).catch(console.error);
+        }
         break;
 
       case 'usage':
@@ -240,7 +430,9 @@ export async function handleAgentRepl(config: KarlConfig, options: AgentOptions 
       const cmd = cmdArgs[0];
 
       if (['exit', 'quit', 'q'].includes(cmd)) {
-        await fs.appendFile(sessionFile, `\n--- Session ended ---\n`);
+        if (sessionFile) {
+          await fs.appendFile(sessionFile, `\n--- Session ended ---\n`);
+        }
         console.log(`${pc.dim('Goodbye')}`);
         rl.close();
         process.exit(0);
@@ -270,16 +462,7 @@ export async function handleAgentRepl(config: KarlConfig, options: AgentOptions 
       }
 
       if (cmd === 'help' || cmd === '?') {
-        console.log(pc.dim(`
-Commands:
-/reset    Clear history
-/exit    Quit
-/calls   List calls
-raw N    Raw output for call N
-/help    This help
-
-Nested: agent runs karl commands like "build login"
-        `));
+        printAgentHelp();
         rl.prompt();
         return;
       }
@@ -307,14 +490,16 @@ Nested: agent runs karl commands like "build login"
 
     // User prompt
     isProcessing = true;
-    await fs.appendFile(sessionFile, `\n## User\n\n${trimmed}\n\n`).catch(console.error);
+    resetAssistantStream();
+    if (sessionFile) {
+      await fs.appendFile(sessionFile, `\n## User\n\n${trimmed}\n\n`).catch(console.error);
+    }
 
     try {
       await orchestrator.prompt(trimmed);
     } catch (error) {
-      if ((error as Error).name !== 'AbortError') {
-        console.error(pc.red((error as Error).message));
-      }
+      // The orchestrator emits user-facing errors; avoid printing the same
+      // thrown provider/tool error a second time here.
     } finally {
       isProcessing = false;
       rl.prompt();

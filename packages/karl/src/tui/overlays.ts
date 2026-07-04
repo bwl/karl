@@ -16,7 +16,7 @@ export interface OverlayRender {
   height: number;
 }
 
-export type OverlayKind = 'input' | 'inline-input' | 'textarea' | 'confirm' | 'picker';
+export type OverlayKind = 'input' | 'inline-input' | 'textarea' | 'confirm' | 'picker' | 'message';
 
 export interface OverlayBase {
   kind: OverlayKind;
@@ -64,7 +64,12 @@ export interface PickerOverlay extends OverlayBase {
   selectedIndex: number;
 }
 
-export type OverlayState = InputOverlay | TextareaOverlay | ConfirmOverlay | PickerOverlay;
+export interface MessageOverlay extends OverlayBase {
+  kind: 'message';
+  message: string;
+}
+
+export type OverlayState = InputOverlay | TextareaOverlay | ConfirmOverlay | PickerOverlay | MessageOverlay;
 
 export interface OverlayCommand {
   type: 'submit' | 'cancel';
@@ -335,6 +340,27 @@ function renderTextareaOverlay(overlay: TextareaOverlay, termWidth: number, term
   };
 }
 
+function renderMessageOverlay(overlay: MessageOverlay, termWidth: number, termHeight: number): OverlayRender {
+  const width = Math.min(termWidth, Math.max(36, Math.min(86, overlay.width ?? termWidth - 6)));
+  const content: string[] = [];
+  for (const paragraph of overlay.message.split('\n')) {
+    if (!paragraph.trim()) {
+      content.push('');
+      continue;
+    }
+    content.push(...wrapText(paragraph, width - 2));
+  }
+  if (overlay.hint) {
+    content.push('');
+    content.push(overlay.hint);
+  }
+
+  const lines = renderBox(content, width, overlay.title);
+  const height = lines.length;
+  const { left, top } = computeCenterPlacement(width, height, termWidth, termHeight);
+  return { lines, width, height, left, top };
+}
+
 export function renderOverlay(overlay: OverlayState, termWidth: number, termHeight: number): OverlayRender {
   switch (overlay.kind) {
     case 'inline-input':
@@ -347,6 +373,8 @@ export function renderOverlay(overlay: OverlayState, termWidth: number, termHeig
       return renderPickerOverlay(overlay, termWidth, termHeight);
     case 'textarea':
       return renderTextareaOverlay(overlay, termWidth, termHeight);
+    case 'message':
+      return renderMessageOverlay(overlay, termWidth, termHeight);
     default:
       return {
         lines: [],
@@ -507,6 +535,13 @@ function updatePickerOverlay(overlay: PickerOverlay, key: Keypress, text: string
   return { overlay };
 }
 
+function updateMessageOverlay(overlay: MessageOverlay, key: Keypress): OverlayUpdate {
+  if (key.name === 'escape' || key.name === 'return' || key.name === 'q' || key.name === '?') {
+    return { overlay: null, command: { type: 'cancel' } };
+  }
+  return { overlay };
+}
+
 export function updateOverlay(overlay: OverlayState, key: Keypress, text: string): OverlayUpdate {
   switch (overlay.kind) {
     case 'input':
@@ -519,6 +554,8 @@ export function updateOverlay(overlay: OverlayState, key: Keypress, text: string
       return updateConfirmOverlay(overlay, key, text);
     case 'picker':
       return updatePickerOverlay(overlay, key, text);
+    case 'message':
+      return updateMessageOverlay(overlay, key);
     default:
       return { overlay };
   }

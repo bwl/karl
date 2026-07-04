@@ -6,7 +6,9 @@
  *   karl magic -v "task"         # verbose (reasoning + command output)
  *   karl magic -q "task"         # quiet (final answer only)
  *   karl magic -c "follow up"    # resume last thread
+ *   karl magic --persist "task"   # create a persistent Codex app thread
  *   karl magic -m model "task"   # model override
+ *   karl magic --effort high     # reasoning effort (default: none)
  *   karl magic --json "task"     # JSON output
  */
 
@@ -26,11 +28,24 @@ interface CodexOptions {
   cwd: string;
   instructions?: string;
   continue: boolean;
+  persist: boolean;
   schema?: string;
   effort?: string;
   json: boolean;
   stats: boolean;
   task: string | null;
+}
+
+const REASONING_EFFORTS = new Set(['none', 'minimal', 'low', 'medium', 'high', 'xhigh']);
+const DEFAULT_REASONING_EFFORT = 'none';
+
+function normalizeEffort(effort?: string): string {
+  const normalized = (effort ?? DEFAULT_REASONING_EFFORT).toLowerCase();
+  return normalized === 'off' ? 'none' : normalized;
+}
+
+function formatEffortForDisplay(effort: string): string {
+  return effort === 'none' ? 'off' : effort;
 }
 
 function parseArgs(args: string[]): CodexOptions {
@@ -39,6 +54,7 @@ function parseArgs(args: string[]): CodexOptions {
     quiet: false,
     cwd: process.cwd(),
     continue: false,
+    persist: false,
     json: false,
     stats: false,
     task: null,
@@ -55,7 +71,11 @@ function parseArgs(args: string[]): CodexOptions {
       case '-q': case '--quiet':
         opts.quiet = true; break;
       case '-c': case '--continue':
-        opts.continue = true; break;
+        opts.continue = true;
+        opts.persist = true;
+        break;
+      case '--persist':
+        opts.persist = true; break;
       case '-j': case '--json':
         opts.json = true; break;
       case '--stats':
@@ -141,13 +161,22 @@ export async function handleMagicCommand(args: string[]): Promise<void> {
     console.error('  -v, --verbose       Full event stream (reasoning, commands, diffs)');
     console.error('  -q, --quiet         Print only final answer');
     console.error('  -c, --continue      Resume last thread');
+    console.error('  --persist           Create a persistent Codex app thread');
     console.error('  -m, --model MODEL   Override model');
     console.error('  -j, --json          JSON output');
     console.error('  --cwd PATH          Override working directory');
     console.error('  --instructions STR  Developer instructions');
     console.error('  --schema FILE       JSON Schema for structured output');
-    console.error('  --effort LEVEL      Reasoning effort (low/medium/high/xhigh)');
+    console.error('  --effort LEVEL      Reasoning effort (none/off/minimal/low/medium/high/xhigh)');
     console.error('  --stats             Print token usage');
+    process.exitCode = 1;
+    return;
+  }
+
+  const effort = normalizeEffort(opts.effort);
+  if (!REASONING_EFFORTS.has(effort)) {
+    console.error(`Invalid --effort value: ${opts.effort}`);
+    console.error('Expected one of: none, off, minimal, low, medium, high, xhigh');
     process.exitCode = 1;
     return;
   }
@@ -169,8 +198,9 @@ export async function handleMagicCommand(args: string[]): Promise<void> {
     model: opts.model,
     instructions: opts.instructions,
     approvalPolicy: 'never',
-    effort: opts.effort,
+    effort,
     outputSchema,
+    ephemeral: !opts.persist,
   });
 
   // SIGINT handler
@@ -216,9 +246,13 @@ export async function handleMagicCommand(args: string[]): Promise<void> {
       threadInfo = await client.startThread();
     }
 
-    saveLastThread(opts.cwd, threadInfo.threadId);
+    if (opts.persist) {
+      saveLastThread(opts.cwd, threadInfo.threadId);
+    }
 
     if (!opts.quiet && !opts.json) {
+      process.stderr.write(pc.dim(`using ${threadInfo.model} · reasoning ${formatEffortForDisplay(effort)}\n`));
+      process.stderr.write(pc.dim('i\'m on it\n'));
       spinner.start('magic');
     }
 
@@ -341,6 +375,8 @@ export async function handleMagicCommand(args: string[]): Promise<void> {
       const result: any = {
         result: agentText,
         threadId: client.threadId,
+        model: threadInfo.model,
+        reasoningEffort: effort,
         durationMs: Date.now() - startTime,
       };
       if (tokenInfo && tokenInfo.type === 'token_usage') {

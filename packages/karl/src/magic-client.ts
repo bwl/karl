@@ -32,18 +32,26 @@ export interface CodexClientOptions {
   approvalPolicy?: 'untrusted' | 'on-failure' | 'on-request' | 'never';
   effort?: string;
   outputSchema?: unknown;
+  ephemeral?: boolean;
 }
 
 // ── Client class ────────────────────────────────────────────────────────
 
 export class CodexClient {
-  private proc: Subprocess<'pipe', 'pipe', 'inherit'> | null = null;
+  private proc: Subprocess<'pipe', 'pipe', 'pipe'> | null = null;
   private requestId = 0;
-  private pendingRequests = new Map<number, { resolve: (v: any) => void; reject: (e: Error) => void }>();
+  private pendingRequests = new Map<number, {
+    method: string;
+    resolve: (v: any) => void;
+    reject: (e: Error) => void;
+    timer: ReturnType<typeof setTimeout>;
+  }>();
   private eventQueue: CodexEvent[] = [];
   private eventResolve: (() => void) | null = null;
   private turnDone = false;
   private readLoopDone = false;
+  private closing = false;
+  private stderrBuffer = '';
 
   threadId: string | null = null;
   private turnId: string | null = null;
@@ -53,16 +61,22 @@ export class CodexClient {
   // ── Lifecycle ─────────────────────────────────────────────────────────
 
   async start(): Promise<void> {
-    this.proc = Bun.spawn(['codex', 'app-server'], {
-      stdin: 'pipe',
-      stdout: 'pipe',
-      stderr: 'inherit',
-    });
+    try {
+      this.proc = Bun.spawn(['codex', 'app-server'], {
+        stdin: 'pipe',
+        stdout: 'pipe',
+        stderr: 'pipe',
+      });
+    } catch (error) {
+      throw this.buildStartupError(error);
+    }
     this.startReadLoop();
+    this.startStderrLoop();
   }
 
   async close(): Promise<void> {
     if (!this.proc) return;
+    this.closing = true;
     try {
       this.proc.stdin.end();
     } catch { /* already closed */ }
@@ -85,8 +99,23 @@ export class CodexClient {
   private sendRequest<T>(method: string, params: unknown): Promise<T> {
     const id = this.nextId();
     return new Promise((resolve, reject) => {
-      this.pendingRequests.set(id, { resolve, reject });
-      this.send({ jsonrpc: '2.0', id, method, params });
+      const timer = setTimeout(() => {
+        const pending = this.pendingRequests.get(id);
+        if (!pending) return;
+        this.pendingRequests.delete(id);
+        reject(new Error(
+          `Timed out waiting for Codex app-server response to ${method}. ` +
+          'Run `codex doctor --summary` if this keeps happening.'
+        ));
+      }, 60_000);
+      this.pendingRequests.set(id, { method, resolve, reject, timer });
+      try {
+        this.send({ jsonrpc: '2.0', id, method, params });
+      } catch (error) {
+        clearTimeout(timer);
+        this.pendingRequests.delete(id);
+        reject(error instanceof Error ? error : new Error(String(error)));
+      }
     });
   }
 
@@ -94,13 +123,18 @@ export class CodexClient {
     this.send({ jsonrpc: '2.0', id, result });
   }
 
+  private sendNotification(method: string, params: unknown): void {
+    this.send({ jsonrpc: '2.0', method, params });
+  }
+
   // ── High-level API ────────────────────────────────────────────────────
 
   async initialize(): Promise<string> {
     const result = await this.sendRequest<{ userAgent: string }>('initialize', {
-      clientInfo: { name: 'karl', version: '1.0' },
+      clientInfo: { name: 'karl', title: 'Karl', version: '1.0' },
       capabilities: null,
     });
+    this.sendNotification('initialized', {});
     return result.userAgent;
   }
 
@@ -111,6 +145,7 @@ export class CodexClient {
       sandbox: 'workspace-write',
       developerInstructions: this.options.instructions ?? null,
       model: this.options.model ?? null,
+      ephemeral: this.options.ephemeral ?? false,
       experimentalRawEvents: false,
       persistExtendedHistory: false,
     });
@@ -186,6 +221,7 @@ export class CodexClient {
   private async startReadLoop(): Promise<void> {
     if (!this.proc) return;
 
+    const proc = this.proc;
     const reader = this.proc.stdout.getReader();
     const decoder = new TextDecoder();
     let buffer = '';
@@ -208,12 +244,83 @@ export class CodexClient {
       }
     } finally {
       this.readLoopDone = true;
-      // If the process dies mid-turn, signal completion
-      if (!this.turnDone) {
-        this.pushEvent({ type: 'error', message: 'Codex process exited unexpectedly', willRetry: false });
-        this.pushEvent({ type: 'turn_completed', status: 'failed', lastMessage: null, error: 'Process exited' });
+      const exitCode = await proc.exited.catch(() => null);
+      if (!this.closing) {
+        const error = this.buildProcessExitError(exitCode);
+        this.rejectPendingRequests(error);
+
+        // If the process dies mid-turn, signal completion.
+        if (!this.turnDone) {
+          this.pushEvent({ type: 'error', message: error.message, willRetry: false });
+          this.pushEvent({ type: 'turn_completed', status: 'failed', lastMessage: null, error: error.message });
+        }
       }
     }
+  }
+
+  private async startStderrLoop(): Promise<void> {
+    if (!this.proc) return;
+
+    const reader = this.proc.stderr.getReader();
+    const decoder = new TextDecoder();
+    try {
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        this.appendStderr(decoder.decode(value, { stream: true }));
+      }
+    } catch {
+      // Best-effort diagnostic capture only.
+    }
+  }
+
+  private appendStderr(chunk: string): void {
+    this.stderrBuffer += chunk;
+    if (this.stderrBuffer.length > 6000) {
+      this.stderrBuffer = this.stderrBuffer.slice(-6000);
+    }
+  }
+
+  private rejectPendingRequests(error: Error): void {
+    for (const pending of this.pendingRequests.values()) {
+      clearTimeout(pending.timer);
+      pending.reject(error);
+    }
+    this.pendingRequests.clear();
+  }
+
+  private buildStartupError(error: unknown): Error {
+    const message = (error as Error)?.message ?? String(error);
+    if (/not found|ENOENT|spawn/i.test(message)) {
+      return new Error('Codex CLI was not found. Install Codex, then run `codex login` and try `karl magic` again.');
+    }
+    return new Error(`Failed to start Codex app-server: ${message}`);
+  }
+
+  private buildProcessExitError(exitCode: number | null): Error {
+    const stderr = this.stderrBuffer.trim();
+    const suffix = exitCode === null ? '' : ` (exit code ${exitCode})`;
+    const lower = stderr.toLowerCase();
+
+    if (lower.includes('not authenticated') ||
+        lower.includes('not logged in') ||
+        lower.includes('unauthorized') ||
+        lower.includes('forbidden') ||
+        lower.includes('login')) {
+      return new Error(
+        `Codex app-server exited before it was ready${suffix}. ` +
+        'Run `codex login` first, or `codex login --device-auth` on a headless machine, then retry.'
+      );
+    }
+
+    if (stderr) {
+      return new Error(`Codex app-server exited before it was ready${suffix}:\n${stderr}`);
+    }
+
+    return new Error(
+      `Codex app-server exited before it was ready${suffix}. ` +
+      'Run `codex doctor --summary` to check the local Codex install and authentication.'
+    );
   }
 
   // ── Message dispatch ──────────────────────────────────────────────────
@@ -224,6 +331,7 @@ export class CodexClient {
       const pending = this.pendingRequests.get(msg.id);
       if (pending) {
         this.pendingRequests.delete(msg.id);
+        clearTimeout(pending.timer);
         if ('error' in msg) {
           pending.reject(new Error(msg.error?.message ?? 'Unknown error'));
         } else {

@@ -1,7 +1,7 @@
 import path from 'path';
 import { KarlConfig, CliOptions, ProviderConfig } from './types.js';
 import { deepMerge, expandEnv, readTextIfExists, resolveHomePath } from './utils.js';
-import { loadOAuthCredentials } from './oauth.js';
+import { getOAuthStorageKey, loadOAuthCredentials } from './oauth.js';
 import { loadModelsFromDir } from './commands/models.js';
 import { loadProvidersFromDir } from './commands/providers.js';
 
@@ -145,7 +145,7 @@ export function resolveModel(config: KarlConfig, options: CliOptions): ResolvedM
 function hasValidCredentials(providerKey: string, providerConfig: ProviderConfig): boolean {
   if (providerConfig.authType === 'oauth') {
     // OAuth providers: check if OAuth credentials exist
-    const oauthKey = providerKey === 'claude-pro-max' ? 'anthropic' : providerKey;
+    const oauthKey = getOAuthStorageKey(providerKey);
     const creds = loadOAuthCredentials(oauthKey);
     return creds !== null;
   } else {

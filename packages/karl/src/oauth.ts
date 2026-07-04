@@ -25,6 +25,14 @@ function getOAuthPath(): string {
   return resolveHomePath('~/.config/karl/oauth.json');
 }
 
+export function getOAuthStorageKey(provider: string): string {
+  return provider === 'claude-pro-max' ? 'anthropic' : provider;
+}
+
+export function isOAuthCredentialsExpired(creds: OAuthCredentials): boolean {
+  return Date.now() >= creds.expires;
+}
+
 function ensureConfigDir(): void {
   const configDir = resolveHomePath('~/.config/karl');
   if (!existsSync(configDir)) {
@@ -93,6 +101,27 @@ function generatePKCE(): { verifier: string; challenge: string } {
   return { verifier, challenge };
 }
 
+function parseAuthCodeInput(input: string, verifier: string): { code: string; state: string } {
+  const trimmed = input.trim();
+
+  try {
+    const url = new URL(trimmed);
+    const code = url.searchParams.get('code')?.trim() ?? '';
+    const state = (url.hash ? url.hash.slice(1) : url.searchParams.get('state') ?? verifier).trim();
+    if (code) {
+      return { code, state };
+    }
+  } catch {
+    // Not a full callback URL; fall back to the raw code#state form.
+  }
+
+  const [rawCode, rawState] = trimmed.split('#');
+  return {
+    code: rawCode.trim(),
+    state: (rawState ?? verifier).trim()
+  };
+}
+
 export interface LoginCallbacks {
   onAuthUrl: (url: string) => void;
   onPromptCode: () => Promise<string>;
@@ -116,7 +145,11 @@ export async function loginAnthropic(callbacks: LoginCallbacks): Promise<void> {
   callbacks.onAuthUrl(authUrl);
 
   const authCode = await callbacks.onPromptCode();
-  const [code, state] = authCode.split('#');
+  const { code, state } = parseAuthCodeInput(authCode, verifier);
+
+  if (!code) {
+    throw new Error('OAuth authorization code was empty.');
+  }
 
   const tokenResponse = await fetch(TOKEN_URL, {
     method: 'POST',
@@ -194,7 +227,7 @@ export async function getAnthropicAccessToken(): Promise<string | null> {
   }
 
   // Check if token is expired or about to expire
-  if (Date.now() >= creds.expires) {
+  if (isOAuthCredentialsExpired(creds)) {
     try {
       const newCreds = await refreshAnthropicToken(creds.refresh);
       saveOAuthCredentials('anthropic', newCreds);
@@ -212,12 +245,7 @@ export async function getAnthropicAccessToken(): Promise<string | null> {
  * Get OAuth token for any OAuth-based provider
  */
 export async function getProviderOAuthToken(provider: string): Promise<string | null> {
-  // Map provider keys to their OAuth storage key
-  const oauthProviderMap: Record<string, string> = {
-    'claude-pro-max': 'anthropic'
-  };
-
-  const oauthProvider = oauthProviderMap[provider] || provider;
+  const oauthProvider = getOAuthStorageKey(provider);
 
   if (oauthProvider === 'anthropic') {
     return getAnthropicAccessToken();
@@ -272,7 +300,7 @@ async function ensureClaudeProMaxProvider(): Promise<void> {
 /**
  * Interactive login flow for CLI
  */
-export async function runLoginFlow(): Promise<void> {
+export async function runLoginFlow(providerKey = 'claude-pro-max'): Promise<void> {
   const readline = await import('readline');
   const { exec } = await import('child_process');
 
@@ -311,10 +339,15 @@ export async function runLoginFlow(): Promise<void> {
     }
   });
 
-  // Ensure claude-pro-max provider exists in config
-  await ensureClaudeProMaxProvider();
+  if (providerKey === 'claude-pro-max') {
+    await ensureClaudeProMaxProvider();
+  }
 
   console.log('\n✓ Login successful! Credentials saved.\n');
-  console.log('The "claude-pro-max" provider has been added to your config.');
+  if (providerKey === 'claude-pro-max') {
+    console.log('The "claude-pro-max" provider has been added to your config.');
+  } else {
+    console.log(`The "${providerKey}" provider can now use your Claude OAuth credentials.`);
+  }
   console.log('You can now create models that use this provider.\n');
 }
