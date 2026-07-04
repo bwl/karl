@@ -7,5 +7,27 @@ dist/
 
 # Bun build artifacts
 *.bun-build
-.karl/
+
+# Karl project harness:
+# Commit authored config, keep runtime/session state local.
+.karl/*
+!.karl/
+!.karl/agent.md
+!.karl/agent-context.md
+!.karl/context.md
+!.karl/worktree.md
+!.karl/stacks/
+!.karl/stacks/*.json
+!.karl/skills/
+!.karl/skills/**
+.karl/status.json
+.karl/status/
+.karl/jobs/
+.karl/logs/
+.karl/agent-state.json
+**/.karl/status.json
+**/.karl/status/
+**/.karl/jobs/
+**/.karl/logs/
+**/.karl/agent-state.json
 .ivo/

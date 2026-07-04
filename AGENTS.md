@@ -23,3 +23,5 @@ Commit messages in history are short, imperative summaries (e.g., “Add …”,
 
 ## Configuration & Secrets
 User config lives in `~/.config/karl/`, with project overrides in `./.karl/` (notably `./.karl/stacks/`). Do not commit API keys or personal configs; use environment variables or local config files instead.
+
+Authored Karl harness files under `.karl/` are repository material, not cache. Commit `.karl/agent.md`, `.karl/context.md`, `.karl/worktree.md`, `.karl/stacks/*.json`, and project `.karl/skills/**` when they define how agents should work in this repo. Runtime state such as `.karl/status.json`, `.karl/status/**`, `.karl/jobs/**`, `.karl/logs/**`, and `.karl/agent-state.json` stays untracked.
