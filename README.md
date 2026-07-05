@@ -61,6 +61,7 @@ karl skills           # Manage agent skills
 - [TUI](docs/tui.md)
 - [Volley Mode](docs/volley-mode.md)
 - [Architecture](docs/architecture.md)
+- [Run Architecture Roadmap](docs/run-architecture-roadmap.md)
 - [Agent Skills](packages/karl/AGENT_SKILLS.md)
 
 ## Development
