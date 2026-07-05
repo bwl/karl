@@ -16,6 +16,7 @@ karl init
 karl run "your question or task"
 karl run "analyze auth.go for security issues"
 karl route plan --json "implement the verifier"
+karl route plan --json "read-only assess this repo; do not edit files"
 ```
 
 ### Pipelines

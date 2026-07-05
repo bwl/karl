@@ -39,11 +39,14 @@ Useful for caller agents:
 karl route plan --json "implement the verifier"
 echo "compare these approaches" | karl route plan --json
 karl route select --route panel --json "compare approaches"
+karl route plan --json "read-only assess this repo; do not edit files"
 ```
 
-Route names currently include `coder`, `panel`, `cheap`, `bodyplan`, and
+Route names currently include `coder`, `readonly`, `panel`, `cheap`, `bodyplan`, and
 `direct`. JSON output is stable enough for agents to inspect `kind`, `version`,
-`recommended`, `alternatives`, `availability`, and `execution`.
+`recommended`, `alternatives`, `tools`, `availability`, and `execution`.
+Evidence audits and "do not edit" requests should route to `readonly`, which
+advertises `tools.mode: "read-only"` and omits write/edit tools.
 
 ## Output Control
 

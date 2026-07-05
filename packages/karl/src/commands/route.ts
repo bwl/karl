@@ -104,6 +104,13 @@ function formatAvailability(route: RunRoute): string {
   return `needs ${route.availability.requirements.join(', ')}`;
 }
 
+function formatTools(route: RunRoute): string {
+  if (route.tools.mode === 'none') {
+    return 'local tools off';
+  }
+  return `${route.tools.mode} (${route.tools.allowed.join(', ')})`;
+}
+
 function printRoute(route: RunRoute, label: string): void {
   console.log(`${label}: ${route.label} (${route.route})`);
   console.log(`  Why: ${route.why}`);
@@ -114,7 +121,7 @@ function printRoute(route: RunRoute, label: string): void {
   if (route.model.request) {
     console.log(`  Request: ${compactJson(route.model.request)}`);
   }
-  console.log(`  Tools: ${route.localTools ? 'local tools on' : 'local tools off'}`);
+  console.log(`  Tools: ${formatTools(route)}`);
   console.log(`  Worktree: ${route.worktree ? 'yes' : 'no'}`);
   console.log(`  Availability: ${formatAvailability(route)}`);
   console.log(`  Verification: ${route.verification.join('; ')}`);

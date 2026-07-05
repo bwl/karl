@@ -347,8 +347,8 @@ _karl() {
                         _arguments \\
                             '--json[JSON output]' \\
                             '-j[JSON output]' \\
-                            '--route[Route id or name]:route:(coder panel cheap bodyplan direct)' \\
-                            '-r[Route id or name]:route:(coder panel cheap bodyplan direct)' \\
+                            '--route[Route id or name]:route:(coder readonly panel cheap bodyplan direct)' \\
+                            '-r[Route id or name]:route:(coder readonly panel cheap bodyplan direct)' \\
                             '--cwd[Working directory]:directory:_files -/' \\
                             '--help[Show help]' \\
                             '-h[Show help]'
@@ -464,7 +464,7 @@ complete -c karl -n "__fish_seen_subcommand_from route routes broker" -a "select
 complete -c karl -n "__fish_seen_subcommand_from route routes broker" -a "execute" -d "Alias for select"
 complete -c karl -n "__fish_seen_subcommand_from route routes broker" -a "explain" -d "Alias for plan"
 complete -c karl -n "__fish_seen_subcommand_from route routes broker" -l json -s j -d "JSON output"
-complete -c karl -n "__fish_seen_subcommand_from route routes broker" -l route -s r -d "Route id or name" -xa "coder panel cheap bodyplan direct"
+complete -c karl -n "__fish_seen_subcommand_from route routes broker" -l route -s r -d "Route id or name" -xa "coder readonly panel cheap bodyplan direct"
 complete -c karl -n "__fish_seen_subcommand_from route routes broker" -l cwd -d "Working directory" -r
 
 # completions subcommands

@@ -1,6 +1,11 @@
 export type BrokerIntent = 'code' | 'review' | 'ideation' | 'compare' | 'experiment';
 export type BrokerRisk = 'low' | 'medium' | 'high';
-export type RouteKind = 'coder' | 'panel' | 'cheap' | 'bodyplan' | 'direct';
+export type RouteKind = 'coder' | 'readonly' | 'panel' | 'cheap' | 'bodyplan' | 'direct';
+
+export interface RouteTools {
+  mode: 'none' | 'read-only' | 'read-write';
+  allowed: string[];
+}
 
 export interface RouteModel {
   provider?: string;
@@ -17,9 +22,11 @@ export interface RunRoute {
   id: string;
   label: string;
   route: RouteKind;
+  aliases?: string[];
   why: string;
   model: RouteModel;
   localTools: boolean;
+  tools: RouteTools;
   worktree: boolean;
   verification: string[];
   tradeoff: string;
@@ -75,8 +82,18 @@ const reviewWords = /\b(review|audit|risk|security|regression|diff|inspect)\b/i;
 const compareWords = /\b(compare|options|approaches|tradeoff|which|argue|decide)\b/i;
 const experimentWords = /\b(body|request bodies|multi-model|benchmark|experiment|matrix|router)\b/i;
 const ideationWords = /\b(ideas|brainstorm|weird|names|sketch|cheap|no-tools|provocation)\b/i;
+const readOnlyConstraintWords = /\b(read[- ]?only|readonly|no[- ]?(?:write|edits?|changes?)|without\s+(?:any\s+)?(?:edits?|writes?|changes?|mutations?)|(?:do not|don't|dont|never|avoid)\s+(?:\w+\s+){0,4}(?:edit|write|modify|change|patch|mutate|touch)|leave\s+(?:the\s+)?(?:filesystem|file system|files?|repo|repository|working tree)\s+untouched|(?:filesystem|file system)\s+untouched)\b/i;
+const evidenceAssessmentWords = /\b(assess|assessment|evaluate|investigate|evidence|audit|review|inspect|trace|inventory|map)\b/i;
+const repoEvidenceWords = /\b(repo|repository|codebase|filesystem|file system|working tree|diff|changes?|files?|implementation|source)\b/i;
 
 function interpretTask(task: string): { intent: BrokerIntent; risk: BrokerRisk; summary: string } {
+  if (readOnlyConstraintWords.test(task) || (evidenceAssessmentWords.test(task) && repoEvidenceWords.test(task))) {
+    return {
+      intent: 'review',
+      risk: 'medium',
+      summary: 'Read-only repo evidence task; inspect local context without mutating files.',
+    };
+  }
   if (experimentWords.test(task)) {
     return {
       intent: 'experiment',
@@ -160,6 +177,18 @@ function argvQuote(value: string): string {
   return value;
 }
 
+function noTools(): RouteTools {
+  return { mode: 'none', allowed: [] };
+}
+
+function readOnlyTools(): RouteTools {
+  return { mode: 'read-only', allowed: ['read'] };
+}
+
+function readWriteTools(): RouteTools {
+  return { mode: 'read-write', allowed: ['bash', 'read', 'write', 'edit'] };
+}
+
 function routeTemplates(context: BrokerContext, task: string): Record<RouteKind, Omit<RunRoute, 'id'>> {
   const openRouter = openRouterAvailability(context);
   const direct = directAvailability(context);
@@ -180,6 +209,7 @@ function routeTemplates(context: BrokerContext, task: string): Record<RouteKind,
         },
       },
       localTools: true,
+      tools: readWriteTools(),
       worktree: true,
       verification: ['project typecheck', 'targeted tests from task context'],
       tradeoff: 'Highest setup cost, best containment.',
@@ -190,6 +220,29 @@ function routeTemplates(context: BrokerContext, task: string): Record<RouteKind,
         notes: [
           'Materializes an OpenRouter Pareto coding route.',
           'Actual model execution is intentionally left to the caller until route execution is wired.',
+        ],
+      },
+    },
+    readonly: {
+      label: 'Read-only repo review',
+      route: 'readonly',
+      aliases: ['readonly-review', 'read-only-review', 'repo-review'],
+      why: 'Use this when Karl should inspect repo evidence without mutating files.',
+      model: {
+        model: defaultModel,
+      },
+      localTools: true,
+      tools: readOnlyTools(),
+      worktree: false,
+      verification: ['write/edit tools withheld', 'caller checks git status remains unchanged'],
+      tradeoff: 'Grounded repo evidence, no implementation.',
+      availability: direct,
+      execution: {
+        mode: 'route-only',
+        argv: ['karl', 'route', 'select', '--route', 'readonly', argvQuote(task)],
+        notes: [
+          'Expose only read-only local tools for this route.',
+          'Use before a coder route when the caller needs repo evidence without file mutation.',
         ],
       },
     },
@@ -206,6 +259,7 @@ function routeTemplates(context: BrokerContext, task: string): Record<RouteKind,
         },
       },
       localTools: false,
+      tools: noTools(),
       worktree: false,
       verification: ['caller reads options before execution'],
       tradeoff: 'Good judgment, no repo access unless followed by another route.',
@@ -228,6 +282,7 @@ function routeTemplates(context: BrokerContext, task: string): Record<RouteKind,
         model: 'openrouter/free',
       },
       localTools: false,
+      tools: noTools(),
       worktree: false,
       verification: ['none; output is disposable'],
       tradeoff: 'Low cost, low guarantees.',
@@ -247,6 +302,7 @@ function routeTemplates(context: BrokerContext, task: string): Record<RouteKind,
         model: 'openrouter/bodybuilder',
       },
       localTools: false,
+      tools: noTools(),
       worktree: false,
       verification: ['Karl or caller validates generated request bodies before execution'],
       tradeoff: 'Meta-routing; useful before a batch, not for direct answers.',
@@ -265,6 +321,7 @@ function routeTemplates(context: BrokerContext, task: string): Record<RouteKind,
         model: defaultModel,
       },
       localTools: true,
+      tools: readWriteTools(),
       worktree: false,
       verification: ['normal Karl status/history receipt'],
       tradeoff: 'Fast familiar path, least routing intelligence.',
@@ -283,7 +340,7 @@ function orderFor(intent: BrokerIntent): RouteKind[] {
     case 'code':
       return ['coder', 'direct', 'panel', 'cheap'];
     case 'review':
-      return ['panel', 'direct', 'cheap', 'bodyplan'];
+      return ['readonly', 'panel', 'direct', 'cheap'];
     case 'compare':
       return ['panel', 'bodyplan', 'direct', 'cheap'];
     case 'experiment':
@@ -298,11 +355,19 @@ function findRoute(routes: RunRoute[], selectedRoute?: string): RunRoute | null 
     return null;
   }
   const normalized = selectedRoute.toLowerCase();
-  return routes.find((route) =>
-    route.id === normalized ||
-    route.route === normalized ||
-    route.label.toLowerCase() === normalized
-  ) ?? null;
+  const compact = normalized.replace(/[\s_-]+/g, '');
+  return routes.find((route) => {
+    const candidates = [
+      route.id,
+      route.route,
+      route.label.toLowerCase(),
+      ...(route.aliases ?? []).map((alias) => alias.toLowerCase()),
+    ];
+    return candidates.some((candidate) =>
+      candidate === normalized ||
+      candidate.replace(/[\s_-]+/g, '') === compact
+    );
+  }) ?? null;
 }
 
 function firstAvailable(routes: RunRoute[]): RunRoute {
