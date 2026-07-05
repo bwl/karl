@@ -46,6 +46,8 @@ export interface TaskResult {
 export interface ModelConfig {
   provider: string;
   model: string;
+  // OpenAI-compatible request body passthrough for provider/router knobs.
+  request?: Record<string, unknown>;
   // Optional metadata (auto-fetched for OpenRouter)
   maxTokens?: number;
   contextLength?: number;
@@ -95,6 +97,7 @@ export interface StackConfig {
   temperature?: number;       // 0-1
   timeout?: number;           // ms
   maxTokens?: number;         // Token limit
+  request?: Record<string, unknown>; // Provider/router request body passthrough
   skill?: string;             // Skill name to load
   context?: string;           // Inline context
   contextFile?: string;       // Path to context file
@@ -135,6 +138,7 @@ export interface CliOptions {
   stack?: string;             // Config stack name (via "as" syntax)
   temperature?: number;       // Temperature override
   maxTokens?: number;         // Max tokens override
+  request?: Record<string, unknown>; // Provider/router request body passthrough
   dryRun?: boolean;           // Show config without running
   parent?: string;
   tags?: string[];

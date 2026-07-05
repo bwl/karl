@@ -192,6 +192,7 @@ export class StackManager {
       timeoutMs: stack.timeout,
       temperature: stack.temperature,
       maxTokens: stack.maxTokens,
+      request: stack.request,
       tools: stack.tools,
       noTools: stack.noTools,
       thinking: stack.thinking,

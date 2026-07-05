@@ -45,6 +45,7 @@ export interface AgentLoopConfig {
   providerType?: 'openai' | 'anthropic';  // API format to use
   maxTokens?: number;
   temperature?: number;
+  requestBody?: Record<string, unknown>;
   maxToolRounds?: number;  // Safety limit for tool call loops
   signal?: AbortSignal;
 
@@ -431,6 +432,32 @@ function sanitizeSchema(schema: any): any {
   return clean;
 }
 
+const OPENAI_EXTRA_BODY_RESERVED = new Set([
+  'model',
+  'messages',
+  'stream',
+  'stream_options',
+]);
+
+function applyOpenAIRequestBody(body: Record<string, any>, requestBody?: Record<string, unknown>): void {
+  if (!requestBody) {
+    return;
+  }
+
+  for (const [key, value] of Object.entries(requestBody)) {
+    if (value === undefined || OPENAI_EXTRA_BODY_RESERVED.has(key)) {
+      continue;
+    }
+
+    if (key === 'tools' && Array.isArray(value) && Array.isArray(body.tools)) {
+      body.tools = [...body.tools, ...value];
+      continue;
+    }
+
+    body[key] = value;
+  }
+}
+
 /**
  * Stream a completion from an OpenAI-compatible API.
  */
@@ -464,6 +491,8 @@ async function* streamOpenAI(
   if (config.temperature !== undefined) {
     body.temperature = config.temperature;
   }
+
+  applyOpenAIRequestBody(body, config.requestBody);
 
   const response = await fetch(`${config.baseUrl}/chat/completions`, {
     method: 'POST',

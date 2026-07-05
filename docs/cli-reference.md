@@ -12,6 +12,16 @@ karl run [flags] <task> [task...]
 | `--smart`, `-s` | Larger, more capable model |
 | `--model`, `-m` | Exact model ID |
 
+## Model Commands
+
+```bash
+karl models fusion [alias] [--panel <csv>] [--judge <model>] [--required] [--default]
+```
+
+Creates an OpenRouter Fusion alias using the configured `openrouter` provider.
+The generated model uses `openrouter/fusion`; panel/judge overrides and
+`--required` are stored in the model's `request` passthrough.
+
 ## Output Control
 
 | Flag | Description |

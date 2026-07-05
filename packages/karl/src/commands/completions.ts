@@ -25,7 +25,7 @@ const COMMANDS = [
 // Subcommands
 const SUBCOMMANDS: Record<string, string[]> = {
   providers: ['list', 'add', 'remove', 'edit', 'login', 'logout'],
-  models: ['list', 'add', 'remove', 'edit', 'default'],
+  models: ['list', 'add', 'fusion', 'remove', 'edit', 'default', 'sync', 'browse', 'refresh'],
   stacks: ['list', 'show', 'create', 'edit', 'set', 'remove'],
   skills: ['list', 'show', 'create', 'validate'],
   config: ['tui', 'show', 'edit', 'set'],
@@ -260,9 +260,13 @@ _karl() {
                     local -a subcmds=(
                         'list:List configured models'
                         'add:Add a new model'
+                        'fusion:Add an OpenRouter Fusion model alias'
                         'remove:Remove a model'
                         'edit:Edit a model file'
                         'default:Set the default model'
+                        'sync:Sync model registry from OpenRouter'
+                        'browse:Browse available models'
+                        'refresh:Refresh OpenRouter metadata'
                     )
                     if (( CURRENT == 2 )); then
                         _describe 'subcommand' subcmds
@@ -396,9 +400,13 @@ complete -c karl -n "__fish_seen_subcommand_from providers" -a "logout" -d "Logo
 # models subcommands
 complete -c karl -n "__fish_seen_subcommand_from models" -a "list" -d "List configured models"
 complete -c karl -n "__fish_seen_subcommand_from models" -a "add" -d "Add a new model"
+complete -c karl -n "__fish_seen_subcommand_from models" -a "fusion" -d "Add an OpenRouter Fusion model alias"
 complete -c karl -n "__fish_seen_subcommand_from models" -a "remove" -d "Remove a model"
 complete -c karl -n "__fish_seen_subcommand_from models" -a "edit" -d "Edit a model file"
 complete -c karl -n "__fish_seen_subcommand_from models" -a "default" -d "Set the default model"
+complete -c karl -n "__fish_seen_subcommand_from models" -a "sync" -d "Sync model registry from OpenRouter"
+complete -c karl -n "__fish_seen_subcommand_from models" -a "browse" -d "Browse available models"
+complete -c karl -n "__fish_seen_subcommand_from models" -a "refresh" -d "Refresh OpenRouter metadata"
 
 # stacks subcommands
 complete -c karl -n "__fish_seen_subcommand_from stacks" -a "list" -d "List available stacks"

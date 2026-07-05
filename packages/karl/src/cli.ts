@@ -1,6 +1,6 @@
 #!/usr/bin/env bun
 import path from 'path';
-import { loadConfig, resolveModel, isConfigValid } from './config.js';
+import { loadConfig, mergeRequestBodies, resolveModel, isConfigValid } from './config.js';
 import { buildSystemPrompt } from './context.js';
 import { HookRunner } from './hooks.js';
 import { initState, applyEvent } from './state.js';
@@ -1147,6 +1147,7 @@ async function main() {
           unrestricted: effectiveOptions.unrestricted,
           timeoutMs: effectiveOptions.timeoutMs,
           maxTokens: effectiveOptions.maxTokens ?? resolvedModel.maxTokens,
+          requestBody: mergeRequestBodies(resolvedModel.request, effectiveOptions.request),
           contextLength: resolvedModel.contextLength,
           thinking: effectiveOptions.thinking,
           cacheControl: effectiveOptions.cacheControl,

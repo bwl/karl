@@ -7,6 +7,7 @@ Use external agent projects as weather reports:
 - Pi and OMP are references for provider/model/tool trends, not architectural targets.
 - Prefer tiny compatibility shims over new runtime dependencies.
 - Raw provider and model strings are allowed when the configured wire protocol supports them.
+- OpenRouter routers belong in model/stack `request` passthrough config, not in new runtime branches.
 - Local project choices beat synced catalogs.
 
 Treat these `.karl/` paths as authored repository files when present:

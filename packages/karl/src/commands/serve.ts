@@ -26,6 +26,7 @@ interface JsonRpcRequest {
     model?: string;
     temperature?: number;
     maxTokens?: number;
+    requestBody?: Record<string, unknown>;
     thinking?: {
       enabled: boolean;
       budgetTokens?: number;
@@ -146,6 +147,7 @@ async function handleGenerate(request: JsonRpcRequest): Promise<void> {
       apiKey,
       providerType,
       maxTokens: params.maxTokens ?? resolved.maxTokens ?? 4096,
+      requestBody: params.requestBody ?? resolved.request,
       temperature: params.temperature ?? 1.0
       // Don't set maxToolRounds - use default; we pass empty tools array anyway
     };

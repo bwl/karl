@@ -90,8 +90,21 @@ export interface ResolvedModel {
   providerKey: string;
   providerConfig: ProviderConfig;
   modelKey: string;
+  request?: Record<string, unknown>;
   maxTokens?: number;
   contextLength?: number;
+}
+
+export function mergeRequestBodies(
+  ...bodies: Array<Record<string, unknown> | undefined>
+): Record<string, unknown> | undefined {
+  const merged: Record<string, unknown> = {};
+  for (const body of bodies) {
+    if (body && typeof body === 'object' && !Array.isArray(body)) {
+      Object.assign(merged, body);
+    }
+  }
+  return Object.keys(merged).length > 0 ? merged : undefined;
 }
 
 export function resolveModel(config: KarlConfig, options: CliOptions): ResolvedModel {
@@ -114,6 +127,7 @@ export function resolveModel(config: KarlConfig, options: CliOptions): ResolvedM
         providerKey: fallbackModel.provider,
         providerConfig,
         modelKey,
+        request: fallbackModel.request,
         maxTokens: fallbackModel.maxTokens,
         contextLength: fallbackModel.contextLength,
       };
@@ -134,6 +148,7 @@ export function resolveModel(config: KarlConfig, options: CliOptions): ResolvedM
     providerKey: modelConfig.provider,
     providerConfig,
     modelKey,
+    request: modelConfig.request,
     maxTokens: modelConfig.maxTokens,
     contextLength: modelConfig.contextLength,
   };
@@ -177,6 +192,7 @@ export function resolveAgentModel(config: KarlConfig): ResolvedModel {
     providerKey: modelConfig.provider,
     providerConfig,
     modelKey: agentModelKey,
+    request: modelConfig.request,
     maxTokens: modelConfig.maxTokens,
     contextLength: modelConfig.contextLength,
   };

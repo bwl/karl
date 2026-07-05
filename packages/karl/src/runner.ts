@@ -28,6 +28,7 @@ export interface RunTaskParams {
   unrestricted?: boolean;
   timeoutMs?: number;
   maxTokens?: number;
+  requestBody?: Record<string, unknown>;
   maxToolRounds?: number;
   contextLength?: number;
   thinking?: { enabled: boolean; budgetTokens?: number };  // Extended thinking
@@ -150,6 +151,7 @@ export async function runTask(params: RunTaskParams): Promise<TaskResult> {
       apiKey: params.apiKey,
       providerType,
       maxTokens: params.maxTokens,
+      requestBody: params.requestBody,
       maxToolRounds: params.maxToolRounds ?? 50,
       signal: params.timeoutMs ? new AbortController().signal : undefined,
       // Anthropic-specific features

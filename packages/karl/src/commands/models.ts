@@ -233,6 +233,9 @@ export async function showModel(alias: string) {
   console.log(`# ${alias}${isDefault ? ' (default)' : ''}\n`);
   console.log(`**Provider:** ${model.provider}`);
   console.log(`**Model:** ${model.model}`);
+  if (model.request) {
+    console.log(`**Request:** ${JSON.stringify(model.request)}`);
+  }
 
   if (provider) {
     console.log(`**Provider Type:** ${provider.type}`);
@@ -249,6 +252,7 @@ export async function showModel(alias: string) {
  */
 const PROVIDER_MODELS: Record<string, string[]> = {
   openrouter: [
+    'openrouter/fusion',
     'anthropic/claude-sonnet-4',
     'anthropic/claude-opus-4',
     'openai/gpt-4o',
@@ -509,6 +513,79 @@ export async function addModel(options: AddModelOptions) {
   } catch (error) {
     rl.close();
     throw error;
+  }
+}
+
+interface AddFusionModelOptions {
+  alias: string;
+  analysisModels?: string[];
+  judgeModel?: string;
+  forceRequired?: boolean;
+  setDefault?: boolean;
+}
+
+function parseCsv(value: string): string[] {
+  return value.split(',').map((entry) => entry.trim()).filter(Boolean);
+}
+
+export async function addFusionModel(options: AddFusionModelOptions): Promise<void> {
+  const cwd = process.cwd();
+  const config = await loadConfig(cwd);
+  const alias = options.alias;
+
+  if (config.models?.[alias]) {
+    console.error(`Model "${alias}" already exists. Remove it first with: karl models remove ${alias}`);
+    process.exit(1);
+  }
+
+  if (!config.providers?.openrouter) {
+    console.error('OpenRouter provider is not configured.');
+    console.error('Add it with: karl providers add openrouter');
+    process.exit(1);
+  }
+
+  const plugin: Record<string, unknown> = { id: 'fusion' };
+  if (options.analysisModels && options.analysisModels.length > 0) {
+    plugin.analysis_models = options.analysisModels;
+  }
+  if (options.judgeModel) {
+    plugin.model = options.judgeModel;
+  }
+
+  const request: Record<string, unknown> = {};
+  if (Object.keys(plugin).length > 1) {
+    request.plugins = [plugin];
+  }
+  if (options.forceRequired) {
+    request.tool_choice = 'required';
+  }
+
+  const modelConfig: ModelConfig = {
+    provider: 'openrouter',
+    model: 'openrouter/fusion',
+    ...(Object.keys(request).length > 0 ? { request } : {}),
+  };
+
+  saveModel(alias, modelConfig);
+
+  if (options.setDefault) {
+    const globalConfig = readGlobalConfig();
+    globalConfig.defaultModel = alias;
+    writeGlobalConfig(globalConfig);
+  }
+
+  console.log(`✓ OpenRouter Fusion model "${alias}" added.`);
+  console.log('  Provider: openrouter');
+  console.log('  Model: openrouter/fusion');
+  if (options.analysisModels && options.analysisModels.length > 0) {
+    console.log(`  Panel: ${options.analysisModels.join(', ')}`);
+  }
+  if (options.judgeModel) {
+    console.log(`  Judge: ${options.judgeModel}`);
+  }
+  if (options.forceRequired) {
+    console.log('  Fusion: required');
+    console.log('  Tip: use --no-tools or a no-tools stack when you need guaranteed fusion.');
   }
 }
 
@@ -791,6 +868,35 @@ export async function handleModelsCommand(args: string[]) {
       break;
     }
 
+    case 'fusion':
+    case 'add-fusion': {
+      let alias = 'fusion';
+      let analysisModels: string[] | undefined;
+      let judgeModel: string | undefined;
+      let forceRequired = false;
+      let setDefault = false;
+      let sawAlias = false;
+
+      for (let i = 0; i < rest.length; i++) {
+        const arg = rest[i];
+        if ((arg === '--analysis-models' || arg === '--panel') && rest[i + 1]) {
+          analysisModels = parseCsv(rest[++i]);
+        } else if ((arg === '--judge' || arg === '--judge-model') && rest[i + 1]) {
+          judgeModel = rest[++i];
+        } else if (arg === '--required') {
+          forceRequired = true;
+        } else if (arg === '--default' || arg === '-d') {
+          setDefault = true;
+        } else if (!arg.startsWith('-') && !sawAlias) {
+          alias = arg;
+          sawAlias = true;
+        }
+      }
+
+      await addFusionModel({ alias, analysisModels, judgeModel, forceRequired, setDefault });
+      break;
+    }
+
     case 'remove':
     case 'rm':
     case 'delete':
@@ -841,6 +947,7 @@ export async function handleModelsCommand(args: string[]) {
         console.error('  list              List configured models');
         console.error('  show <alias>      Show model details');
         console.error('  add [alias]       Add a new model');
+        console.error('  fusion [alias]    Add an OpenRouter Fusion model alias');
         console.error('  remove <alias>    Remove a model');
         console.error('  edit <alias>      Edit a model file');
         console.error('  default <alias>   Set the default model');
@@ -852,9 +959,14 @@ export async function handleModelsCommand(args: string[]) {
         console.error('  --provider, -p    Filter by provider (anthropic, openai, etc.)');
         console.error('  --search, -s      Search in model names/descriptions');
         console.error('  --offline         Use cached registry without syncing');
+        console.error('');
+        console.error('Fusion options:');
+        console.error('  --panel <csv>     Override fusion analysis models');
+        console.error('  --judge <model>   Override fusion judge model');
+        console.error('  --required        Force fusion tool invocation');
       } else {
         console.error(`Unknown models command: ${command}`);
-        console.error('Available commands: list, show, add, remove, edit, default, sync, browse, refresh');
+        console.error('Available commands: list, show, add, fusion, remove, edit, default, sync, browse, refresh');
       }
       process.exit(1);
   }

@@ -1161,6 +1161,7 @@ ${projectContext.text}`;
         baseUrl,
         apiKey,
         providerType,
+        requestBody: resolved.request,
         maxToolRounds: 100,  // High limit since orchestrator uses karl tool calls for everything
         signal: this.abortController.signal,
         // Enable extended thinking for orchestrator (benefits from deep reasoning)
