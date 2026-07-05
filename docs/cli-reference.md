@@ -22,6 +22,29 @@ Creates an OpenRouter Fusion alias using the configured `openrouter` provider.
 The generated model uses `openrouter/fusion`; panel/judge overrides and
 `--required` are stored in the model's `request` passthrough.
 
+## Route Broker
+
+```bash
+karl route plan [--json] [--route <id|name>] [--cwd <path>] <task>
+karl route select [--json] [--route <id|name>] [--cwd <path>] <task>
+```
+
+`karl route` is the agent-facing two-step run broker. It interprets a task,
+chooses a recommended route, lists alternatives, and materializes the selected
+route as text or JSON. It does not silently replace `karl run`.
+
+Useful for caller agents:
+
+```bash
+karl route plan --json "implement the verifier"
+echo "compare these approaches" | karl route plan --json
+karl route select --route panel --json "compare approaches"
+```
+
+Route names currently include `coder`, `panel`, `cheap`, `bodyplan`, and
+`direct`. JSON output is stable enough for agents to inspect `kind`, `version`,
+`recommended`, `alternatives`, `availability`, and `execution`.
+
 ## Output Control
 
 | Flag | Description |

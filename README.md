@@ -15,6 +15,7 @@ karl init
 ```bash
 karl run "your question or task"
 karl run "analyze auth.go for security issues"
+karl route plan --json "implement the verifier"
 ```
 
 ### Pipelines
@@ -43,6 +44,7 @@ karl review "check auth.ts"       # Use it as a command
 
 ```bash
 karl run <task>       # Run a task (default stack)
+karl route            # Plan/select a brokered run route
 karl init             # First-time setup
 karl providers        # Manage LLM providers
 karl models           # Manage models

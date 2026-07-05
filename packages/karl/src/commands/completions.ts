@@ -18,6 +18,7 @@ const COMMANDS = [
   'previous', 'prev', 'last',
   'tldr', 'help',
   'agent', 'claude',
+  'route', 'routes', 'broker',
   'debugdesign', 'dd',
   'completions'
 ];
@@ -31,6 +32,9 @@ const SUBCOMMANDS: Record<string, string[]> = {
   config: ['tui', 'show', 'edit', 'set'],
   jobs: ['clean'],
   history: ['list', 'show', 'clear'],
+  route: ['plan', 'select', 'execute', 'explain'],
+  routes: ['plan', 'select', 'execute', 'explain'],
+  broker: ['plan', 'select', 'execute', 'explain'],
   completions: ['bash', 'zsh', 'fish'],
   debugdesign: ['realistic', 'stress', 'errors', 'all'],
   dd: ['realistic', 'stress', 'errors', 'all']
@@ -81,6 +85,7 @@ _karl_completions() {
     local stacks_cmds="${SUBCOMMANDS.stacks.join(' ')}"
     local skills_cmds="${SUBCOMMANDS.skills.join(' ')}"
     local jobs_cmds="${SUBCOMMANDS.jobs.join(' ')}"
+    local route_cmds="${SUBCOMMANDS.route.join(' ')}"
     local completions_cmds="${SUBCOMMANDS.completions.join(' ')}"
     local debugdesign_cmds="${SUBCOMMANDS.debugdesign.join(' ')}"
     local config_cmds="${SUBCOMMANDS.config.join(' ')}"
@@ -128,6 +133,14 @@ _karl_completions() {
             ;;
         jobs)
             COMPREPLY=($(compgen -W "$jobs_cmds" -- "$cur"))
+            return
+            ;;
+        route|routes|broker)
+            if [[ \${cword} -eq 2 ]]; then
+                COMPREPLY=($(compgen -W "$route_cmds" -- "$cur"))
+            elif [[ "$cur" == -* ]]; then
+                COMPREPLY=($(compgen -W "--json -j --route -r --cwd --help -h" -- "$cur"))
+            fi
             return
             ;;
         completions)
@@ -321,6 +334,26 @@ _karl() {
                     local -a subcmds=('clean:Cleanup old completed jobs')
                     _describe 'subcommand' subcmds
                     ;;
+                route|routes|broker)
+                    local -a subcmds=(
+                        'plan:Print a brokered run plan'
+                        'select:Materialize a selected route'
+                        'execute:Alias for select'
+                        'explain:Alias for plan'
+                    )
+                    if (( CURRENT == 2 )); then
+                        _describe 'subcommand' subcmds
+                    else
+                        _arguments \\
+                            '--json[JSON output]' \\
+                            '-j[JSON output]' \\
+                            '--route[Route id or name]:route:(coder panel cheap bodyplan direct)' \\
+                            '-r[Route id or name]:route:(coder panel cheap bodyplan direct)' \\
+                            '--cwd[Working directory]:directory:_files -/' \\
+                            '--help[Show help]' \\
+                            '-h[Show help]'
+                    fi
+                    ;;
                 completions)
                     local -a shells=('bash:Bash completion script' 'zsh:Zsh completion script' 'fish:Fish completion script')
                     _describe 'shell' shells
@@ -425,6 +458,15 @@ complete -c karl -n "__fish_seen_subcommand_from skills" -a "validate" -d "Valid
 # jobs subcommands
 complete -c karl -n "__fish_seen_subcommand_from jobs" -a "clean" -d "Cleanup old completed jobs"
 
+# route subcommands
+complete -c karl -n "__fish_seen_subcommand_from route routes broker" -a "plan" -d "Print a brokered run plan"
+complete -c karl -n "__fish_seen_subcommand_from route routes broker" -a "select" -d "Materialize a selected route"
+complete -c karl -n "__fish_seen_subcommand_from route routes broker" -a "execute" -d "Alias for select"
+complete -c karl -n "__fish_seen_subcommand_from route routes broker" -a "explain" -d "Alias for plan"
+complete -c karl -n "__fish_seen_subcommand_from route routes broker" -l json -s j -d "JSON output"
+complete -c karl -n "__fish_seen_subcommand_from route routes broker" -l route -s r -d "Route id or name" -xa "coder panel cheap bodyplan direct"
+complete -c karl -n "__fish_seen_subcommand_from route routes broker" -l cwd -d "Working directory" -r
+
 # completions subcommands
 complete -c karl -n "__fish_seen_subcommand_from completions" -a "bash" -d "Bash completion script"
 complete -c karl -n "__fish_seen_subcommand_from completions" -a "zsh" -d "Zsh completion script"
@@ -506,6 +548,9 @@ function getCommandDescription(cmd: string): string {
     help: 'Show help',
     agent: 'Interactive orchestrator',
     claude: 'Launch Claude Code with Karl tools',
+    route: 'Plan/select a brokered run route',
+    routes: 'Plan/select a brokered run route',
+    broker: 'Plan/select a brokered run route',
     debugdesign: 'UI simulation for design',
     dd: 'UI simulation (alias)',
     completions: 'Generate shell completions'

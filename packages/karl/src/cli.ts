@@ -58,6 +58,9 @@ const BUILTIN_COMMANDS = new Set([
   'completions', // Shell completion scripts
   'serve',     // JSON-RPC server for IPC with other tools
   'magic',     // Delegate task to magic
+  'route',     // Plan/select a brokered run route
+  'routes',    // Alias for route
+  'broker',    // Alias for route
 ]);
 
 /**
@@ -243,6 +246,7 @@ Commands:
   agent                     Interactive orchestrator (runs karl commands)
   claude                    Launch Claude Code with Karl-only access
   magic                     Delegate task to magic
+  route                     Plan/select a brokered run route
 
 Flags:
   --help, -h           Show full help
@@ -303,6 +307,7 @@ Built-in Commands:
   agent                     Interactive orchestrator (runs karl commands)
   claude                    Launch Claude Code with Karl-only access
   magic                     Delegate task to magic
+  route                     Plan/select a brokered run route
 ${stackVerbs}
 Flags (use with 'run'):
   --model, -m          Model alias or exact model id
@@ -814,6 +819,12 @@ async function main() {
   else if (firstArg === 'magic') {
     const { handleMagicCommand } = await import('./commands/magic.js');
     await handleMagicCommand(args.slice(1));
+    return;
+  }
+  // Handle 'route' command - agent-facing run broker
+  else if (firstArg === 'route' || firstArg === 'routes' || firstArg === 'broker') {
+    const { handleRouteCommand } = await import('./commands/route.js');
+    await handleRouteCommand(args.slice(1));
     return;
   }
   // ─────────────────────────────────────────────────────────────────────────
