@@ -4,11 +4,12 @@ import { deepMerge, expandEnv, readTextIfExists, resolveHomePath } from './utils
 import { getOAuthStorageKey, loadOAuthCredentials } from './oauth.js';
 import { loadModelsFromDir } from './commands/models.js';
 import { loadProvidersFromDir } from './commands/providers.js';
+import { CODEX_PROVIDER_CONFIG, CODEX_PROVIDER_KEY, getCodexProviderStatus, isCodexProvider } from './codex-provider.js';
 
 const DEFAULT_CONFIG: KarlConfig = {
   defaultModel: '',
   models: {},
-  providers: {},
+  providers: { [CODEX_PROVIDER_KEY]: CODEX_PROVIDER_CONFIG },
   tools: {
     enabled: ['bash', 'read', 'write', 'edit'],
     custom: ['~/.config/karl/tools/*.ts']
@@ -72,6 +73,9 @@ export async function loadConfig(cwd: string): Promise<KarlConfig> {
   // Merge folder-loaded models and providers (folder takes precedence)
   merged.models = { ...merged.models, ...models };
   merged.providers = { ...merged.providers, ...providers };
+  // Codex is a Karl runtime transport, not user-owned JSON configuration.
+  // Keep the built-in authoritative so it cannot be accidentally shadowed.
+  merged.providers[CODEX_PROVIDER_KEY] = { ...CODEX_PROVIDER_CONFIG };
 
   const legacyVolley = (merged as { volley?: { retryAttempts?: number; retryBackoff?: 'exponential' | 'linear' } }).volley;
   const hasRetryOverride = !!(globalConfig?.retry || projectConfig?.retry);
@@ -158,6 +162,9 @@ export function resolveModel(config: KarlConfig, options: CliOptions): ResolvedM
  * Check if a provider has valid credentials
  */
 function hasValidCredentials(providerKey: string, providerConfig: ProviderConfig): boolean {
+  if (isCodexProvider(providerConfig)) {
+    return getCodexProviderStatus().authenticated;
+  }
   if (providerConfig.authType === 'oauth') {
     // OAuth providers: check if OAuth credentials exist
     const oauthKey = getOAuthStorageKey(providerKey);

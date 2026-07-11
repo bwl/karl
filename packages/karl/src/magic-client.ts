@@ -33,6 +33,7 @@ export interface CodexClientOptions {
   effort?: string;
   outputSchema?: unknown;
   ephemeral?: boolean;
+  sandbox?: 'read-only' | 'workspace-write' | 'danger-full-access';
 }
 
 // ── Client class ────────────────────────────────────────────────────────
@@ -142,7 +143,7 @@ export class CodexClient {
     const result = await this.sendRequest<any>('thread/start', {
       cwd: this.options.cwd,
       approvalPolicy: this.options.approvalPolicy ?? 'never',
-      sandbox: 'workspace-write',
+      sandbox: this.options.sandbox ?? 'workspace-write',
       developerInstructions: this.options.instructions ?? null,
       model: this.options.model ?? null,
       ephemeral: this.options.ephemeral ?? false,
@@ -292,7 +293,7 @@ export class CodexClient {
   private buildStartupError(error: unknown): Error {
     const message = (error as Error)?.message ?? String(error);
     if (/not found|ENOENT|spawn/i.test(message)) {
-      return new Error('Codex CLI was not found. Install Codex, then run `codex login` and try `karl magic` again.');
+      return new Error('Codex CLI was not found. Install Codex, then run `codex login` and try again.');
     }
     return new Error(`Failed to start Codex app-server: ${message}`);
   }

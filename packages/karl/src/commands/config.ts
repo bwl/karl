@@ -8,6 +8,7 @@ import { readTextIfExists, resolveHomePath, formatError } from '../utils.js';
 import { createDefaultBackend } from '../config-backend.js';
 import { modelExists } from './models.js';
 import { providerExists } from './providers.js';
+import { CODEX_PROVIDER_KEY, getCodexProviderStatus, isCodexProvider } from '../codex-provider.js';
 import { applyOverlay, renderOverlay, updateOverlay } from '../tui/overlays.js';
 import type { OverlayState, OverlayCommand, PickerItem } from '../tui/overlays.js';
 import { padRight, truncateLine, wrapText } from '../tui/text.js';
@@ -22,7 +23,7 @@ const GLOBAL_PROVIDERS_DIR = resolveHomePath('~/.config/karl/providers');
 const GLOBAL_STACKS_DIR = resolveHomePath('~/.config/karl/stacks');
 
 type SectionId = 'overview' | 'models' | 'providers' | 'stacks' | 'tools' | 'retry' | 'history' | 'agent' | 'files';
-type ConfigSource = 'file' | 'inline-global' | 'inline-project' | 'inline-unknown';
+type ConfigSource = 'builtin' | 'file' | 'inline-global' | 'inline-project' | 'inline-unknown';
 
 interface ModelEntry {
   alias: string;
@@ -507,6 +508,9 @@ function formatPrice(value?: number): string {
 }
 
 function formatProviderAuth(key: string, provider: ProviderConfig): string {
+  if (isCodexProvider(provider)) {
+    return `codex cli (${getCodexProviderStatus().detail})`;
+  }
   if (provider.authType === 'oauth') {
     const oauthKey = getOAuthStorageKey(key);
     const creds = loadOAuthCredentials(oauthKey);
@@ -543,7 +547,7 @@ async function loadTuiData(cwd: string): Promise<TuiData> {
   const providers = Object.entries(config.providers ?? {}).map(([key, provider]) => ({
     key,
     config: provider,
-    source: providerExists(key) ? 'file' : getSourceForInlineKey(key, globalConfig, projectConfig, 'providers'),
+    source: key === CODEX_PROVIDER_KEY ? 'builtin' : providerExists(key) ? 'file' : getSourceForInlineKey(key, globalConfig, projectConfig, 'providers'),
   })).sort((a, b) => a.key.localeCompare(b.key));
 
   const manager = new StackManager(config);

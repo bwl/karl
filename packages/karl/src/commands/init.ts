@@ -14,6 +14,7 @@ import { createInterface } from 'readline';
 import { ProviderConfig } from '../types.js';
 import { saveModel } from './models.js';
 import { saveProvider } from './providers.js';
+import { CODEX_PROVIDER_KEY, getCodexProviderStatus } from '../codex-provider.js';
 
 const GLOBAL_CONFIG_PATH = join(homedir(), '.config', 'karl', 'karl.json');
 const GLOBAL_STACKS_PATH = join(homedir(), '.config', 'karl', 'stacks');
@@ -22,6 +23,11 @@ const GLOBAL_STACKS_PATH = join(homedir(), '.config', 'karl', 'stacks');
  * Known provider templates
  */
 const PROVIDER_TEMPLATES: Record<string, { type: string; config: Partial<ProviderConfig>; models: string[]; envVar?: string }> = {
+  codex: {
+    type: 'codex',
+    config: { type: 'codex', authType: 'codex' },
+    models: ['gpt-5.6-sol', 'gpt-5.6-terra', 'gpt-5.6-luna', 'gpt-5.6-sol-pro', 'gpt-5.6-terra-pro', 'gpt-5.6-luna-pro'],
+  },
   anthropic: {
     type: 'anthropic',
     config: { type: 'anthropic', apiKey: '${ANTHROPIC_API_KEY}' },
@@ -132,7 +138,9 @@ export async function runInitWizard(): Promise<boolean> {
     const providerNames = Object.keys(PROVIDER_TEMPLATES);
     providerNames.forEach((name, i) => {
       const template = PROVIDER_TEMPLATES[name];
-      const authType = template.config.authType === 'oauth' ? 'OAuth (Claude Pro/Max subscription)' : 'API Key';
+      const authType = template.config.authType === 'codex'
+        ? 'Codex CLI (ChatGPT login)'
+        : template.config.authType === 'oauth' ? 'OAuth (Claude Pro/Max subscription)' : 'API Key';
       console.log(`  ${i + 1}. ${name} - ${authType}`);
     });
     console.log('');
@@ -161,6 +169,11 @@ export async function runInitWizard(): Promise<boolean> {
           providerConfig.apiKey = apiKey;
         }
       }
+    } else if (template.config.authType === 'codex') {
+      const status = getCodexProviderStatus();
+      console.log(status.authenticated
+        ? '\n✓ Codex CLI is logged in.'
+        : `\nCodex is not ready: ${status.detail}.`);
     } else if (template.config.authType === 'oauth') {
       console.log('\nNote: You\'ll need to run `karl --login` to authenticate with OAuth.');
     }
@@ -188,8 +201,10 @@ export async function runInitWizard(): Promise<boolean> {
 
     rl.close();
 
-    // Save provider to folder
-    saveProvider(providerKey, providerConfig);
+    // Codex is built in; other providers remain user-owned JSON files.
+    if (providerKey !== CODEX_PROVIDER_KEY) {
+      saveProvider(providerKey, providerConfig);
+    }
 
     // Save model to folder
     saveModel(alias, {
@@ -216,7 +231,11 @@ export async function runInitWizard(): Promise<boolean> {
     console.log('  karl models add');
     console.log('');
 
-    if (template.config.authType === 'oauth') {
+    if (template.config.authType === 'codex' && !getCodexProviderStatus().authenticated) {
+      console.log('Don\'t forget to authenticate:');
+      console.log('  codex login');
+      console.log('');
+    } else if (template.config.authType === 'oauth') {
       console.log('Don\'t forget to authenticate:');
       console.log('  karl --login');
       console.log('');

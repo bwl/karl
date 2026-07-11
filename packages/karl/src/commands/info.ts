@@ -10,6 +10,7 @@ import { getOAuthStorageKey, getProviderOAuthToken, loadOAuthCredentials } from 
 import { skillManager } from '../skills.js';
 import { StackManager } from '../stacks.js';
 import { resolveHomePath } from '../utils.js';
+import { getCodexProviderStatus, isCodexProvider } from '../codex-provider.js';
 
 export interface InfoOutput {
   version: string;
@@ -22,7 +23,7 @@ export interface InfoOutput {
   auth: {
     [provider: string]: {
       authenticated: boolean;
-      method: 'oauth' | 'api_key' | 'none';
+      method: 'oauth' | 'api_key' | 'codex' | 'none';
       expires_at?: string;
     };
   };
@@ -73,7 +74,13 @@ export async function getInfo(cwd: string): Promise<InfoOutput> {
   const authStatus: InfoOutput['auth'] = {};
 
   for (const [name, providerConfig] of Object.entries(config.providers ?? {})) {
-    if (providerConfig.authType === 'oauth') {
+    if (isCodexProvider(providerConfig)) {
+      const status = getCodexProviderStatus();
+      authStatus[name] = {
+        authenticated: status.authenticated,
+        method: status.authenticated ? 'codex' : 'none'
+      };
+    } else if (providerConfig.authType === 'oauth') {
       // OAuth-based provider - check oauth.json for credentials
       const oauthStorageKey = getOAuthStorageKey(name);
       const token = await getProviderOAuthToken(name);
@@ -109,7 +116,9 @@ export async function getInfo(cwd: string): Promise<InfoOutput> {
   // Provider status
   const providers: InfoOutput['providers'] = {};
   for (const [name, providerConfig] of Object.entries(config.providers ?? {})) {
-    let hasAuth = checkApiKeyPresent(providerConfig.apiKey);
+    let hasAuth = isCodexProvider(providerConfig)
+      ? getCodexProviderStatus().authenticated
+      : checkApiKeyPresent(providerConfig.apiKey);
 
     // Also check OAuth credentials for OAuth providers
     if (providerConfig.authType === 'oauth') {

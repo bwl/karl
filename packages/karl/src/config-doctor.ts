@@ -5,6 +5,7 @@ import { getOAuthStorageKey, isOAuthCredentialsExpired, loadOAuthCredentials } f
 import { isSandboxAvailable } from './sandbox.js';
 import type { KarlConfig, StackConfig } from './types.js';
 import { resolveHomePath } from './utils.js';
+import { CODEX_PROVIDER_CONFIG, CODEX_PROVIDER_KEY, getCodexProviderStatus } from './codex-provider.js';
 
 export type DiagnosticSeverity = 'error' | 'warning';
 
@@ -29,7 +30,7 @@ export interface ConfigDoctorReport {
   };
   effective: {
     defaultModel: string | null;
-    providers: Array<{ name: string; source: string; auth: { method: 'api_key' | 'oauth'; ready: boolean; detail: string } }>;
+    providers: Array<{ name: string; source: string; auth: { method: 'api_key' | 'oauth' | 'codex'; ready: boolean; detail: string } }>;
     models: Array<{ name: string; source: string; provider: string; model: string; valid: boolean }>;
     stacks: Array<{ name: string; source: string; model: string | null; extends: string | null; skill: string | null; valid: boolean }>;
   };
@@ -150,6 +151,10 @@ export async function diagnoseConfig(cwd = process.cwd()): Promise<ConfigDoctorR
   overlay(models, scanDirectory(modelsDirectory, 'models', diagnostics), diagnostics, 'Model');
   overlay(stacks, scanDirectory(globalStacksDirectory, 'stacks', diagnostics), diagnostics, 'Stack');
   overlay(stacks, scanDirectory(projectStacksDirectory, 'stacks', diagnostics), diagnostics, 'Stack');
+  overlay(providers, new Map([[CODEX_PROVIDER_KEY, {
+    value: CODEX_PROVIDER_CONFIG as Record<string, unknown>,
+    source: '<builtin:codex>',
+  }]]), diagnostics, 'Built-in provider');
 
   let config: KarlConfig | null = null;
   if (!diagnostics.some(item => item.severity === 'error' && [globalConfigPath, projectConfigPath].includes(item.source ?? ''))) {
@@ -165,13 +170,19 @@ export async function diagnoseConfig(cwd = process.cwd()): Promise<ConfigDoctorR
   }
 
   const effectiveProviders = [...providers.entries()].sort(([a], [b]) => a.localeCompare(b)).map(([name, entry]) => {
-    const authType: 'oauth' | 'api_key' = entry.value.authType === 'oauth' ? 'oauth' : 'api_key';
+    const authType: 'oauth' | 'api_key' | 'codex' = entry.value.authType === 'codex'
+      ? 'codex'
+      : entry.value.authType === 'oauth' ? 'oauth' : 'api_key';
     let ready = false;
     let detail: string;
     if (!stringField(entry.value.type)) {
       diagnostics.push({ severity: 'error', code: 'invalid_provider', message: `Provider "${name}" requires a non-empty type field.`, source: entry.source });
     }
-    if (authType === 'oauth') {
+    if (authType === 'codex') {
+      const status = getCodexProviderStatus();
+      ready = status.authenticated;
+      detail = status.detail;
+    } else if (authType === 'oauth') {
       const storageKey = getOAuthStorageKey(name);
       const credentials = loadOAuthCredentials(storageKey);
       const supported = storageKey === 'anthropic';

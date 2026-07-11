@@ -24,6 +24,7 @@ import {
   loadRegistry,
   type OpenRouterModel,
 } from '../registry.js';
+import { isCodexProvider } from '../codex-provider.js';
 
 const GLOBAL_CONFIG_PATH = join(homedir(), '.config', 'karl', 'karl.json');
 const MODELS_DIR = join(homedir(), '.config', 'karl', 'models');
@@ -242,7 +243,7 @@ export async function showModel(alias: string) {
     if (provider.baseUrl) {
       console.log(`**Base URL:** ${provider.baseUrl}`);
     }
-    console.log(`**Auth:** ${provider.authType === 'oauth' ? 'OAuth' : 'API Key'}`);
+    console.log(`**Auth:** ${isCodexProvider(provider) ? 'Codex CLI' : provider.authType === 'oauth' ? 'OAuth' : 'API Key'}`);
   }
 }
 
@@ -251,6 +252,14 @@ export async function showModel(alias: string) {
  * Note: Anthropic models are fetched dynamically from the API
  */
 const PROVIDER_MODELS: Record<string, string[]> = {
+  codex: [
+    'gpt-5.6-sol',
+    'gpt-5.6-terra',
+    'gpt-5.6-luna',
+    'gpt-5.6-sol-pro',
+    'gpt-5.6-terra-pro',
+    'gpt-5.6-luna-pro',
+  ],
   openrouter: [
     'openrouter/fusion',
     'anthropic/claude-sonnet-4',
@@ -373,7 +382,7 @@ export async function addModel(options: AddModelOptions) {
       console.log('\nAvailable providers:');
       providerNames.forEach((name, i) => {
         const provider = providers[name];
-        const authType = provider.authType === 'oauth' ? 'OAuth' : 'API Key';
+        const authType = isCodexProvider(provider) ? 'Codex CLI' : provider.authType === 'oauth' ? 'OAuth' : 'API Key';
         console.log(`  ${i + 1}. ${name} (${authType})`);
       });
       console.log('');

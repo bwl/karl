@@ -63,7 +63,7 @@ export interface ProviderConfig {
   baseUrl?: string;
   proxyUrl?: string;  // CORS proxy URL (e.g., http://localhost:3001)
   apiKey?: string;
-  authType?: 'api_key' | 'oauth';
+  authType?: 'api_key' | 'oauth' | 'codex';
   [key: string]: unknown;
 }
 

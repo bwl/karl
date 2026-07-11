@@ -18,6 +18,7 @@ import { TaskRunError } from './errors.js';
 import type { AgentEvent } from './agent-loop.js';
 import { buildHistoryId, createHistoryStore, type HistoryRunEventInput, type HistoryThinkingEntry } from './history.js';
 import { loadContextManifest } from './context-store.js';
+import { getCodexProviderStatus, isCodexProvider } from './codex-provider.js';
 
 /**
  * Built-in commands that are handled specially.
@@ -993,7 +994,15 @@ async function main() {
   // Resolve credentials based on provider's authType
   let apiKey: string | null | undefined;
 
-  if (resolvedModel.providerConfig.authType === 'oauth') {
+  if (isCodexProvider(resolvedModel.providerConfig)) {
+    const status = getCodexProviderStatus();
+    if (!status.authenticated) {
+      console.error(`Codex provider is not ready: ${status.detail}.`);
+      process.exitCode = 1;
+      return;
+    }
+    apiKey = 'codex-cli';
+  } else if (resolvedModel.providerConfig.authType === 'oauth') {
     // OAuth-based provider - fetch token automatically
     apiKey = await getProviderOAuthToken(resolvedModel.providerKey);
   } else {
@@ -1082,7 +1091,7 @@ async function main() {
     console.log(`Provider:     ${resolvedModel.providerKey}`);
     console.log(`Model:        ${resolvedModel.model}`);
     console.log(`Model Alias:  ${resolvedModel.modelKey}`);
-    console.log(`Auth:         ${resolvedModel.providerConfig.authType === 'oauth' ? 'OAuth' : 'API Key'}`);
+    console.log(`Auth:         ${isCodexProvider(resolvedModel.providerConfig) ? 'Codex CLI' : resolvedModel.providerConfig.authType === 'oauth' ? 'OAuth' : 'API Key'}`);
     if (effectiveOptions.skill) {
       console.log(`Skill:        ${effectiveOptions.skill}`);
     }

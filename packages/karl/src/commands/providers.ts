@@ -17,6 +17,11 @@ import {
 } from '../oauth.js';
 import { ProviderConfig } from '../types.js';
 import { loadConfig } from '../config.js';
+import {
+  CODEX_PROVIDER_KEY,
+  getCodexProviderStatus,
+  isCodexProvider,
+} from '../codex-provider.js';
 
 const PROVIDERS_DIR = join(homedir(), '.config', 'karl', 'providers');
 const MODELS_DIR = join(homedir(), '.config', 'karl', 'models');
@@ -223,6 +228,15 @@ async function getProviderStatus(providerKey: string, providerConfig: ProviderCo
   authMethod: string;
   detail?: string;
 }> {
+  if (isCodexProvider(providerConfig)) {
+    const status = getCodexProviderStatus();
+    return {
+      configured: status.installed,
+      authenticated: status.authenticated,
+      authMethod: 'Codex CLI',
+      detail: status.detail,
+    };
+  }
   const isOAuth = providerConfig.authType === 'oauth';
 
   if (isOAuth) {
@@ -284,6 +298,7 @@ export async function listProviders() {
 
   console.log('');
   console.log('To authenticate:');
+  console.log('  codex login                       (for the built-in Codex provider)');
   console.log('  karl providers login <name>     (for OAuth providers)');
   console.log('  Set environment variable        (for API key providers)');
 }
@@ -358,6 +373,12 @@ export async function addProvider(providerKey?: string) {
       }
     }
 
+    if (providerKey === CODEX_PROVIDER_KEY) {
+      console.log('Provider "codex" is built into Karl; run `codex login` to authenticate it.');
+      rl.close();
+      return;
+    }
+
     // Check if already exists
     if (providerExists(providerKey)) {
       console.log(`Provider "${providerKey}" already exists.`);
@@ -430,6 +451,10 @@ export async function addProvider(providerKey?: string) {
  * Remove a provider
  */
 export async function removeProvider(providerKey: string) {
+  if (providerKey === CODEX_PROVIDER_KEY) {
+    console.error('Provider "codex" is built into Karl and cannot be removed.');
+    process.exit(1);
+  }
   if (!providerExists(providerKey)) {
     console.error(`Provider "${providerKey}" not found.`);
     process.exit(1);
@@ -461,6 +486,10 @@ export async function removeProvider(providerKey: string) {
  * Edit a provider (opens the provider file or config containing it)
  */
 export async function editProvider(providerKey: string) {
+  if (providerKey === CODEX_PROVIDER_KEY) {
+    console.error('Provider "codex" is built into Karl and has no JSON configuration. Use `codex login` to manage authentication.');
+    process.exit(1);
+  }
   const filePath = join(PROVIDERS_DIR, `${providerKey}.json`);
   if (existsSync(filePath)) {
     openInEditor(filePath);

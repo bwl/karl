@@ -18,6 +18,7 @@ import type { KarlConfig } from '../types.js';
 import { formatDuration, parseDurationMs, resolveHomePath } from '../utils.js';
 import { TaskRunError } from '../errors.js';
 import { boundDisplayText } from '../print.js';
+import { isCodexProvider } from '../codex-provider.js';
 
 interface CompareOptions {
   models: string[];
@@ -66,6 +67,11 @@ function parseArgs(args: string[]): CompareOptions {
 }
 
 async function resolveCredential(alias: string, resolved: ResolvedModel): Promise<string> {
+  if (isCodexProvider(resolved.providerConfig)) {
+    throw new Error(
+      `model ${alias} uses the Codex provider, which cannot guarantee the comparison command's no-tools contract`
+    );
+  }
   const credential = resolved.providerConfig.authType === 'oauth'
     ? await getProviderOAuthToken(resolved.providerKey)
     : resolved.providerConfig.apiKey;

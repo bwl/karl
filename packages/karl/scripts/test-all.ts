@@ -708,6 +708,12 @@ async function testConfig() {
     assert(typeof config.providers === 'object', 'providers should be object');
   });
 
+  await test('Codex is always available as a built-in provider', async () => {
+    const config = await loadConfig(TEST_DIR);
+    assertEqual(config.providers.codex?.type, 'codex');
+    assertEqual(config.providers.codex?.authType, 'codex');
+  });
+
   await test('isConfigValid works', async () => {
     const config = await loadConfig(TEST_DIR);
     // Empty config may or may not be valid depending on defaults
@@ -983,6 +989,17 @@ async function testModelComparisons() {
     await assertRejects(() => preflightComparisonModels({ ...config, providers: { local: { ...config.providers.local, apiKey: '' } } }, ['alpha']), 'no usable credentials');
   });
 
+  await test('comparison preflight fails closed for Codex tool isolation', async () => {
+    const { preflightComparisonModels } = await import('../src/commands/compare.js');
+    const config = {
+      defaultModel: 'alpha',
+      models: { alpha: { provider: 'codex', model: 'gpt-fixture' } },
+      providers: { codex: { type: 'codex', authType: 'codex' as const } },
+      tools: { enabled: [], custom: [] }, retry: { attempts: 1, backoff: 'linear' as const },
+    };
+    await assertRejects(() => preflightComparisonModels(config, ['alpha']), 'no-tools contract');
+  });
+
   await test('bounded runner preserves order, identical inputs, and isolated failures', async () => {
     let active = 0;
     let peak = 0;
@@ -1123,6 +1140,62 @@ async function testCLI() {
     const { exitCode } = await runKarl('providers list');
     // May have no providers configured, but shouldn't crash
     assert(exitCode === 0 || exitCode === 1, 'Should not crash');
+  });
+
+  await test('providers list exposes the built-in Codex provider', async () => {
+    const home = join(TEST_DIR, 'providers-cli-home');
+    mkdirSync(home, { recursive: true });
+    const { stdout, exitCode } = await runKarl('providers list', { HOME: home });
+    assertEqual(exitCode, 0);
+    assertContains(stdout, 'codex');
+    assertContains(stdout, 'Codex CLI');
+  });
+
+  await test('normal runs dispatch Codex models through the app-server transport', async () => {
+    const home = join(TEST_DIR, 'codex-run-home');
+    const bin = join(TEST_DIR, 'codex-run-bin');
+    mkdirSync(join(home, '.config', 'karl', 'models'), { recursive: true });
+    mkdirSync(bin, { recursive: true });
+    writeFileSync(join(home, '.config', 'karl', 'karl.json'), JSON.stringify({ defaultModel: 'codex-fixture' }));
+    writeFileSync(join(home, '.config', 'karl', 'models', 'codex-fixture.json'), JSON.stringify({
+      provider: 'codex', model: 'gpt-fixture'
+    }));
+    const fakeCodex = join(bin, 'codex');
+    writeFileSync(fakeCodex, `#!/usr/bin/env bun
+const args = process.argv.slice(2);
+if (args[0] === '--version') { console.log('codex-cli fixture'); process.exit(0); }
+if (args[0] === 'login' && args[1] === 'status') { console.log('Logged in using fixture'); process.exit(0); }
+if (args[0] !== 'app-server') process.exit(2);
+let buffer = '';
+const send = (value: unknown) => process.stdout.write(JSON.stringify(value) + '\\n');
+for await (const chunk of Bun.stdin.stream()) {
+  buffer += new TextDecoder().decode(chunk);
+  const lines = buffer.split('\\n');
+  buffer = lines.pop() ?? '';
+  for (const line of lines) {
+    if (!line.trim()) continue;
+    const request = JSON.parse(line);
+    if (request.method === 'initialize') send({ jsonrpc: '2.0', id: request.id, result: { userAgent: 'fixture' } });
+    else if (request.method === 'thread/start') send({ jsonrpc: '2.0', id: request.id, result: { thread: { id: 'thread-fixture' }, model: request.params.model } });
+    else if (request.method === 'turn/start') {
+      send({ jsonrpc: '2.0', id: request.id, result: { turn: { id: 'turn-fixture' } } });
+      send({ jsonrpc: '2.0', method: 'item/agentMessage/delta', params: { delta: 'codex transport fixture' } });
+      send({ jsonrpc: '2.0', method: 'thread/tokenUsage/updated', params: { tokenUsage: { total: { inputTokens: 7, outputTokens: 3, totalTokens: 10 } } } });
+      send({ jsonrpc: '2.0', method: 'turn/completed', params: { turn: { status: 'completed' } } });
+    }
+  }
+}
+`);
+    chmodSync(fakeCodex, 0o755);
+
+    const { stdout, stderr, exitCode } = await runKarlArgs(
+      ['--json', '--no-history', '--model', 'codex-fixture', 'fixture-task'],
+      { HOME: home, PATH: `${bin}:${process.env.PATH ?? ''}` }
+    );
+    assertEqual(exitCode, 0, stderr);
+    assertContains(stdout, 'codex transport fixture');
+    const output = JSON.parse(stdout) as { results: Array<{ tokens?: { total?: number } }> };
+    assertEqual(output.results[0]?.tokens?.total, 10);
   });
 
   await test('models list works', async () => {
