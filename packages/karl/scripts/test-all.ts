@@ -771,6 +771,21 @@ async function testConfig() {
   });
 }
 
+async function testMagicProfiles() {
+  suite('Magic Profiles');
+  const { MAGIC_MODELS, resolveMagicModel } = await import('../src/commands/magic.js');
+
+  await test('defaults to Luna and exposes Sol as the deliberate quality tier', () => {
+    assertEqual(resolveMagicModel(), MAGIC_MODELS.luna);
+    assertEqual(resolveMagicModel('luna'), 'gpt-5.6-luna');
+    assertEqual(resolveMagicModel('sol'), 'gpt-5.6-sol');
+  });
+
+  await test('preserves explicit Codex model IDs for experiments', () => {
+    assertEqual(resolveMagicModel('gpt-experimental'), 'gpt-experimental');
+  });
+}
+
 // ============================================================================
 // Context Manifest Tests
 // ============================================================================
@@ -1196,6 +1211,17 @@ for await (const chunk of Bun.stdin.stream()) {
     assertContains(stdout, 'codex transport fixture');
     const output = JSON.parse(stdout) as { results: Array<{ tokens?: { total?: number } }> };
     assertEqual(output.results[0]?.tokens?.total, 10);
+
+    const magicCwd = join(TEST_DIR, 'magic-profile-cwd');
+    mkdirSync(magicCwd, { recursive: true });
+    const magic = await runKarlArgs(
+      ['magic', '--json', '--no-history', '--cwd', magicCwd, '--sol', 'fixture-task'],
+      { HOME: home, PATH: `${bin}:${process.env.PATH ?? ''}` }
+    );
+    assertEqual(magic.exitCode, 0, magic.stderr);
+    const magicOutput = JSON.parse(magic.stdout) as { model?: string; reasoningEffort?: string };
+    assertEqual(magicOutput.model, 'gpt-5.6-sol');
+    assertEqual(magicOutput.reasoningEffort, 'max');
   });
 
   await test('models list works', async () => {
@@ -1511,6 +1537,7 @@ async function main() {
     await testHistory();
     await testRunInspection();
     await testConfig();
+    await testMagicProfiles();
     await testContextManifests();
     await testRunArchitecture();
     await testModelComparisons();

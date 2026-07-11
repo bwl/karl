@@ -8,7 +8,7 @@
  *   karl magic -c "follow up"    # resume last thread
  *   karl magic --persist "task"   # create a persistent Codex app thread
  *   karl magic -m model "task"   # model override
- *   karl magic --effort high     # reasoning effort (default: none)
+ *   karl magic --effort high     # lower reasoning effort (default: max)
  *   karl magic --json "task"     # JSON output
  *   karl magic --worktree "task" # run in a detached scratch worktree
  */
@@ -78,8 +78,18 @@ interface MagicReceipt {
   error?: string;
 }
 
-const REASONING_EFFORTS = new Set(['none', 'minimal', 'low', 'medium', 'high', 'xhigh']);
-const DEFAULT_REASONING_EFFORT = 'none';
+const REASONING_EFFORTS = new Set(['none', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max', 'ultra']);
+export const MAGIC_MODELS = {
+  luna: 'gpt-5.6-luna',
+  sol: 'gpt-5.6-sol',
+} as const;
+const DEFAULT_MAGIC_MODEL = MAGIC_MODELS.luna;
+const DEFAULT_REASONING_EFFORT = 'max';
+
+export function resolveMagicModel(model?: string): string {
+  if (!model) return DEFAULT_MAGIC_MODEL;
+  return MAGIC_MODELS[model.toLowerCase() as keyof typeof MAGIC_MODELS] ?? model;
+}
 
 function normalizeEffort(effort?: string): string {
   const normalized = (effort ?? DEFAULT_REASONING_EFFORT).toLowerCase();
@@ -140,6 +150,10 @@ function parseArgs(args: string[]): CodexOptions {
         break;
       case '-m': case '--model':
         opts.model = args[++i]; break;
+      case '--luna':
+        opts.model = 'luna'; break;
+      case '--sol':
+        opts.model = 'sol'; break;
       case '--cwd':
         opts.cwd = args[++i]; break;
       case '--instructions': case '--system':
@@ -402,12 +416,14 @@ export async function handleMagicCommand(args: string[]): Promise<void> {
     console.error('  -q, --quiet         Print only final answer');
     console.error('  -c, --continue      Resume last thread');
     console.error('  --persist           Create a persistent Codex app thread');
-    console.error('  -m, --model MODEL   Override model');
+    console.error('  --luna              Use GPT-5.6 Luna (default)');
+    console.error('  --sol               Use GPT-5.6 Sol for the hardest tasks');
+    console.error('  -m, --model MODEL   Use luna, sol, or an explicit Codex model ID');
     console.error('  -j, --json          JSON output');
     console.error('  --cwd PATH          Override working directory');
     console.error('  --instructions STR  Developer instructions');
     console.error('  --schema FILE       JSON Schema for structured output');
-    console.error('  --effort LEVEL      Reasoning effort (none/off/minimal/low/medium/high/xhigh)');
+    console.error('  --effort LEVEL      Reasoning effort (none/off/minimal/low/medium/high/xhigh/max/ultra; default max)');
     console.error('  --stats             Print token usage');
     console.error('  --receipt           Print a five-line delegate receipt');
     console.error('  --require-clean     Fail if --cwd has uncommitted git changes');
@@ -421,10 +437,16 @@ export async function handleMagicCommand(args: string[]): Promise<void> {
   const sourceCwd = resolve(opts.cwd);
   opts.cwd = sourceCwd;
 
+  const model = resolveMagicModel(opts.model);
   const effort = normalizeEffort(opts.effort);
   if (!REASONING_EFFORTS.has(effort)) {
     console.error(`Invalid --effort value: ${opts.effort}`);
-    console.error('Expected one of: none, off, minimal, low, medium, high, xhigh');
+    console.error('Expected one of: none, off, minimal, low, medium, high, xhigh, max, ultra');
+    process.exitCode = 1;
+    return;
+  }
+  if (effort === 'ultra' && model === MAGIC_MODELS.luna) {
+    console.error('Reasoning effort "ultra" is only available with Sol. Use `--sol --effort ultra`.');
     process.exitCode = 1;
     return;
   }
@@ -484,7 +506,7 @@ export async function handleMagicCommand(args: string[]): Promise<void> {
   const effectiveInstructions = appendWorktreeInstructions(opts.instructions, worktreeInfo);
   const client = new CodexClient({
     cwd: runCwd,
-    model: opts.model,
+    model,
     instructions: effectiveInstructions,
     approvalPolicy: 'never',
     effort,
@@ -829,8 +851,8 @@ export async function handleMagicCommand(args: string[]): Promise<void> {
           cwd: runCwd,
           command,
           argv: argvSnapshot,
-          modelKey: opts.model ?? threadInfo?.model,
-          modelId: threadInfo?.model ?? opts.model,
+          modelKey: model,
+          modelId: threadInfo?.model ?? model,
           providerKey: 'codex',
           providerType: 'codex-app-server',
           skill: 'magic',
