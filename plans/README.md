@@ -17,7 +17,7 @@ is implemented. Until then, this index is the durable local queue.
 | [003](003-execute-evidence-led-recipe.md) | Execute one validated evidence-led run recipe | P1 | L | 001, 002 | DONE |
 | [004](004-make-context-packs-inspectable.md) | Make context packs inspectable and reproducible | P2 | M | 001, 002 | DONE |
 | [005](005-add-progressive-run-inspection.md) | Add progressive-disclosure run inspection | P2 | M | 002 | DONE |
-| [006](006-add-explicit-model-comparisons.md) | Add explicit, reproducible model comparisons | P3 | L | 002, 004 | TODO |
+| [006](006-add-explicit-model-comparisons.md) | Add explicit, reproducible model comparisons | P3 | L | 002, 004 | DONE |
 
 Status values: `TODO`, `IN PROGRESS`, `DONE`, `BLOCKED: <reason>`, or
 `REJECTED: <reason>`.

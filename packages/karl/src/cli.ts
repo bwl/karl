@@ -47,6 +47,7 @@ const BUILTIN_COMMANDS = new Set([
   'status',    // Alias for info
   'history',   // Run history
   'context',   // Inspect context manifests
+  'compare',   // Explicit model comparison
   'logs',      // Alias for history (or job logs)
   'jobs',      // List background jobs
   'previous',  // Last response shortcut
@@ -306,6 +307,8 @@ Built-in Commands:
   config                    Config TUI and JSON views
   info                      Show system info (alias: status)
   history                   Show run history (alias: logs)
+  context                   Inspect context manifests
+  compare                   Compare configured models with identical no-tools inputs
   previous                  Print last response (aliases: prev, last)
   agent                     Interactive orchestrator (runs karl commands)
   claude                    Launch Claude Code with Karl-only access
@@ -822,6 +825,12 @@ async function main() {
   else if (firstArg === 'context') {
     const { handleContextCommand } = await import('./commands/context.js');
     await handleContextCommand(args.slice(1));
+    return;
+  }
+  // Handle explicit no-tools model comparisons
+  else if (firstArg === 'compare') {
+    const { handleCompareCommand } = await import('./commands/compare.js');
+    await handleCompareCommand(args.slice(1));
     return;
   }
   // Handle 'serve' command - JSON-RPC server for IPC

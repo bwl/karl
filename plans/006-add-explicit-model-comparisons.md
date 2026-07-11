@@ -6,6 +6,7 @@
 
 ## Status
 
+- **State**: DONE
 - **Priority**: P3
 - **Effort**: L
 - **Risk**: MED
@@ -70,11 +71,11 @@ Use fake providers only. Cover preflight atomicity, identical inputs, ordering, 
 
 ## Done criteria
 
-- [ ] Comparisons are explicit, no-tools, bounded, and reproducible.
-- [ ] Every child has its own durable receipt linked to a parent comparison.
-- [ ] Output reports evidence without silently choosing or configuring a winner.
-- [ ] No marketplace, rankings, learning, or remote sync is introduced.
-- [ ] Full gates pass; scope is clean.
+- [x] Comparisons are explicit, no-tools, bounded, and reproducible.
+- [x] Every child has its own durable receipt linked to a parent comparison.
+- [x] Output reports evidence without silently choosing or configuring a winner.
+- [x] No marketplace, rankings, learning, or remote sync is introduced.
+- [x] Full gates pass; scope is clean.
 
 ## STOP conditions
 

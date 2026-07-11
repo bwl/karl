@@ -22,6 +22,31 @@ Creates an OpenRouter Fusion alias using the configured `openrouter` provider.
 The generated model uses `openrouter/fusion`; panel/judge overrides and
 `--required` are stored in the model's `request` passthrough.
 
+## Explicit Model Comparisons
+
+```bash
+karl compare --models fast,smart [--context <manifest-id>] \
+  [--judge <model>] [--timeout 30s] [--max-concurrent 2] [--json] \
+  "review this design"
+```
+
+Comparison is opt-in, no-tools, and bounded to at most eight concurrent
+candidates. Karl resolves every model alias, provider credential, and optional
+context manifest before it creates the parent journal row. Unknown/duplicate
+models, missing auth, invalid concurrency, legacy context without a manifest,
+or any request for tools fail atomically before inference.
+
+Candidates receive the same normalized task, system policy, context content,
+and input/context hashes. Each candidate has a child receipt linked to the
+parent comparison; one failure does not discard successful evidence, and human
+and versioned JSON output preserve the requested model order. Reports include
+duration, tokens/cost when providers return them, errors, and receipt IDs.
+
+`--judge` adds a separate no-tools synthesis run after the candidates. Its
+rubric, input hash, model, and receipt are explicit, and it never changes Karl's
+configuration. Neither base output nor judge synthesis is a global winner or
+capability ranking: it describes one prompt/context instance.
+
 ## Route Broker
 
 ```bash

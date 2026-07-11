@@ -946,6 +946,135 @@ async function testRunArchitecture() {
 }
 
 // ============================================================================
+// Model Comparison Tests
+// ============================================================================
+
+async function testModelComparisons() {
+  suite('Model Comparisons');
+  const {
+    COMPARISON_JUDGE_RUBRIC,
+    executeComparison,
+    prepareComparisonInput,
+    validateComparisonSpec,
+  } = await import('../src/comparison.js');
+  const baseSpec = {
+    kind: 'karl.comparisonSpec' as const, version: 1 as const,
+    task: 'compare this exact input', models: ['alpha', 'beta', 'gamma'],
+    maxConcurrency: 2, output: 'json' as const, tools: 'none' as const,
+  };
+  const input = prepareComparisonInput(baseSpec.task, 'fixed system policy', 'context-hash');
+
+  await test('spec rejects duplicates, invalid concurrency, and attempted tools', async () => {
+    validateComparisonSpec(baseSpec);
+    await assertRejects(async () => validateComparisonSpec({ ...baseSpec, models: ['alpha', 'alpha'] }), 'unique');
+    await assertRejects(async () => validateComparisonSpec({ ...baseSpec, maxConcurrency: 0 }), '1 to 8');
+    await assertRejects(async () => validateComparisonSpec({ ...baseSpec, tools: 'read' } as never), 'disable tools');
+  });
+
+  await test('preflight rejects unknown aliases and missing auth before execution', async () => {
+    const { preflightComparisonModels } = await import('../src/commands/compare.js');
+    const config = {
+      defaultModel: 'alpha',
+      models: { alpha: { provider: 'local', model: 'a' } },
+      providers: { local: { type: 'openai', baseUrl: 'http://fixture.invalid', apiKey: 'fixture' } },
+      tools: { enabled: [], custom: [] }, retry: { attempts: 1, backoff: 'linear' as const },
+    };
+    await assertRejects(() => preflightComparisonModels(config, ['alpha', 'missing']), 'unknown comparison model alias');
+    await assertRejects(() => preflightComparisonModels({ ...config, providers: { local: { ...config.providers.local, apiKey: '' } } }, ['alpha']), 'no usable credentials');
+  });
+
+  await test('bounded runner preserves order, identical inputs, and isolated failures', async () => {
+    let active = 0;
+    let peak = 0;
+    const requests: Array<{ task: string; systemPrompt: string; inputHash: string; contextHash: string }> = [];
+    const result = await executeComparison(baseSpec, input, 'comparison-fixed', async (request) => {
+      active++;
+      peak = Math.max(peak, active);
+      requests.push(request);
+      await new Promise((resolve) => setTimeout(resolve, request.model === 'alpha' ? 15 : 5));
+      active--;
+      if (request.model === 'beta') throw new Error('isolated beta failure');
+      return {
+        status: 'success', result: `result-${request.model}`, durationMs: 10,
+        tokens: { input: 10, output: 5, total: 15 }, receiptId: `receipt-${request.model}`,
+      };
+    });
+    assertEqual(peak, 2);
+    assertEqual(result.status, 'partial');
+    assertEqual(result.candidates.map(candidate => candidate.model).join(','), 'alpha,beta,gamma');
+    assertEqual(result.candidates[1].error, 'isolated beta failure');
+    assert(requests.every(request => request.task === input.normalizedTask));
+    assert(requests.every(request => request.systemPrompt === input.systemPrompt));
+    assert(requests.every(request => request.inputHash === input.inputHash));
+    assert(requests.every(request => request.contextHash === 'context-hash'));
+    assert(!JSON.stringify(result).includes('winner'));
+  });
+
+  await test('judge is separate, receipted, and exposes rubric provenance', async () => {
+    const roles: string[] = [];
+    const result = await executeComparison({ ...baseSpec, models: ['alpha', 'beta'], judge: 'judge' }, input, 'comparison-judge', async (request) => {
+      roles.push(request.role);
+      return { status: 'success', result: `${request.role} result`, durationMs: 1, receiptId: `${request.role}-receipt` };
+    });
+    assertEqual(roles.join(','), 'candidate,candidate,judge');
+    assertEqual(result.judge?.rubric, COMPARISON_JUDGE_RUBRIC);
+    assertEqual(result.judge?.receiptId, 'judge-receipt');
+    assert(result.judge?.inputHash !== result.inputHash);
+    assertEqual(result.interpretation, 'This is evidence from one prompt/context instance, not a model capability ranking.');
+  });
+
+  await test('timeout is passed identically and isolated as candidate failure', async () => {
+    const seenTimeouts: Array<number | undefined> = [];
+    const result = await executeComparison({ ...baseSpec, models: ['alpha', 'beta'], timeoutMs: 25 }, input, 'comparison-timeout', async (request) => {
+      seenTimeouts.push(request.timeoutMs);
+      if (request.model === 'alpha') throw new Error('Task timed out after 25ms');
+      return { status: 'success', result: 'beta', durationMs: 2, receiptId: 'beta-receipt' };
+    });
+    assertEqual(seenTimeouts.join(','), '25,25');
+    assertEqual(result.status, 'partial');
+    assertContains(result.candidates[0].error ?? '', 'timed out');
+    assertEqual(result.kind, 'karl.comparisonResult');
+    assertEqual(result.version, 1);
+  });
+
+  await test('fake child receipts link durably to the parent comparison', async () => {
+    const { HistoryStore } = await import('../src/history.js');
+    const store = new HistoryStore(join(TEST_DIR, 'comparison-history.db'));
+    store.startRun({ id: 'comparison-parent', createdAt: 1, cwd: TEST_DIR, command: 'compare', prompt: baseSpec.task });
+    const result = await executeComparison({ ...baseSpec, models: ['alpha', 'beta'] }, input, 'comparison-parent', async (request) => {
+      const childId = `child-${request.model}`;
+      store.startRun({ id: childId, createdAt: Date.now(), cwd: TEST_DIR, command: 'candidate', prompt: request.task, parentId: 'comparison-parent' });
+      store.finishRun(childId, { completedAt: Date.now(), durationMs: 1, status: 'success', terminalReason: 'succeeded' });
+      return { status: 'success', result: request.model, durationMs: 1, receiptId: childId };
+    });
+    assertEqual(store.getRunById(result.candidates[0].receiptId)?.parentId, 'comparison-parent');
+    assertEqual(store.getRunById(result.candidates[1].receiptId)?.parentId, 'comparison-parent');
+    store.close();
+  });
+
+  await test('CLI preflight failure is atomic and creates no comparison journal', async () => {
+    const repo = join(TEST_DIR, 'comparison-preflight');
+    const home = join(repo, 'home');
+    const historyPath = join(repo, 'history.db');
+    mkdirSync(home, { recursive: true });
+    writeFileSync(join(repo, '.karl.json'), JSON.stringify({
+      defaultModel: 'alpha',
+      models: { alpha: { provider: 'local', model: 'a' } },
+      providers: { local: { type: 'openai', baseUrl: 'http://fixture.invalid', apiKey: 'fixture' } },
+      history: { enabled: true, path: historyPath },
+    }));
+    const karl = join(import.meta.dir, '../src/cli.ts');
+    const proc = Bun.spawn(['bun', karl, 'compare', '--models', 'alpha,missing', '--cwd', repo, 'task'], {
+      stdout: 'pipe', stderr: 'pipe', env: { ...process.env, HOME: home },
+    });
+    const stderr = await new Response(proc.stderr).text();
+    assertEqual(await proc.exited, 1);
+    assertContains(stderr, 'unknown comparison model alias');
+    assert(!existsSync(historyPath), 'Comparison journal started before preflight completed');
+  });
+}
+
+// ============================================================================
 // CLI Command Tests (subprocess)
 // ============================================================================
 
@@ -1311,6 +1440,7 @@ async function main() {
     await testConfig();
     await testContextManifests();
     await testRunArchitecture();
+    await testModelComparisons();
     await testCLI();
     await testIntegration();
   } finally {

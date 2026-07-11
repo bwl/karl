@@ -172,6 +172,19 @@ covers its versioned metadata. Use `karl context show <id>` and
 versions of Ivo or Karl remain readable as legacy packs; Karl does not migrate,
 delete, or rewrite them automatically.
 
+### Comparison inputs
+
+`karl compare --models a,b` accepts configured model aliases only; raw fallback
+model IDs are intentionally rejected so the experiment can preflight provider
+and authentication state atomically. The comparison does not change
+`defaultModel`, model files, provider files, or request defaults.
+
+An optional `--context <id>` must identify a valid Karl context manifest, not a
+legacy content-only pack. The manifest and pack hashes are recorded with the
+comparison so every candidate can prove it received the same context instance.
+Provider-reported token and cost data is recorded when present; Karl does not
+require or maintain a pricing database for comparisons.
+
 **No session state.** Each invocation is fresh. For multi-turn work, use a full coding agent and delegate to Karl for side tasks.
 
 ## History, Retention, and Privacy

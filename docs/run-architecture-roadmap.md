@@ -385,6 +385,12 @@ analytics product.
 
 ### 13. Provider And Model Landscape Awareness
 
+Implementation note (2026-07-11): `karl compare --models ...` now provides the
+small explicit experiment primitive: identical no-tools input/context hashes,
+bounded concurrency, separate linked receipts, partial-failure preservation,
+and an optional separately receipted judge rubric. It does not rank models,
+learn routing preferences, or change defaults.
+
 Karl should be lazily compatible with providers and models.
 
 That means:

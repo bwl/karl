@@ -14,7 +14,7 @@ const COMMANDS = [
   'init', 'setup',
   'providers', 'models', 'stacks', 'skills',
   'config',
-  'info', 'status', 'history', 'context', 'logs', 'jobs',
+  'info', 'status', 'history', 'context', 'compare', 'logs', 'jobs',
   'previous', 'prev', 'last',
   'tldr', 'help',
   'agent', 'claude',
@@ -143,6 +143,12 @@ _karl_completions() {
                 COMPREPLY=($(compgen -W "$context_cmds" -- "$cur"))
             elif [[ "$cur" == -* ]]; then
                 COMPREPLY=($(compgen -W "--json -j --content --cwd --help -h" -- "$cur"))
+            fi
+            return
+            ;;
+        compare)
+            if [[ "$cur" == -* ]]; then
+                COMPREPLY=($(compgen -W "--models --context --judge --timeout --max-concurrent --json -j --cwd --help -h" -- "$cur"))
             fi
             return
             ;;
@@ -355,6 +361,16 @@ _karl() {
                         _arguments '--json[JSON output]' '-j[JSON output]' '--content[Include full pack content]' '--cwd[Working directory]:directory:_files -/'
                     fi
                     ;;
+                compare)
+                    _arguments \
+                        '--models[Comma-separated model aliases]:models:' \
+                        '--context[Context manifest ID]:context:' \
+                        '--judge[Separate synthesis model]:model:->models' \
+                        '--timeout[Per-candidate timeout]:timeout:' \
+                        '--max-concurrent[Concurrency cap]:count:' \
+                        '--json[JSON output]' '-j[JSON output]' \
+                        '--cwd[Working directory]:directory:_files -/'
+                    ;;
                 route|routes|broker)
                     local -a subcmds=(
                         'plan:Print a brokered run plan'
@@ -487,6 +503,15 @@ complete -c karl -n "__fish_seen_subcommand_from context" -l json -s j -d "JSON 
 complete -c karl -n "__fish_seen_subcommand_from context" -l content -d "Include full pack content"
 complete -c karl -n "__fish_seen_subcommand_from context" -l cwd -d "Working directory" -r
 
+# compare flags
+complete -c karl -n "__fish_seen_subcommand_from compare" -l models -d "Comma-separated model aliases" -r
+complete -c karl -n "__fish_seen_subcommand_from compare" -l context -d "Context manifest ID" -r
+complete -c karl -n "__fish_seen_subcommand_from compare" -l judge -d "Separate synthesis model" -xa "(__karl_models)"
+complete -c karl -n "__fish_seen_subcommand_from compare" -l timeout -d "Per-candidate timeout" -r
+complete -c karl -n "__fish_seen_subcommand_from compare" -l max-concurrent -d "Concurrency cap" -r
+complete -c karl -n "__fish_seen_subcommand_from compare" -l json -s j -d "JSON output"
+complete -c karl -n "__fish_seen_subcommand_from compare" -l cwd -d "Working directory" -r
+
 # route subcommands
 complete -c karl -n "__fish_seen_subcommand_from route routes broker" -a "plan" -d "Print a brokered run plan"
 complete -c karl -n "__fish_seen_subcommand_from route routes broker" -a "select" -d "Materialize a selected route"
@@ -576,6 +601,7 @@ function getCommandDescription(cmd: string): string {
     status: 'Show status',
     history: 'Show run history',
     context: 'Inspect context manifests',
+    compare: 'Compare models with identical no-tools inputs',
     logs: 'Show logs',
     jobs: 'List background jobs',
     previous: 'Print last response',
