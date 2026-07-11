@@ -1,10 +1,14 @@
-# Karl Current Consolidation Roadmap and Handoff
+# Karl July 2026 Consolidation Handoff
 
-**Status:** current engineering roadmap and handoff
+**Status:** historical; completed and superseded as a live roadmap
 **Last updated:** 2026-07-11
 **Scope:** focused consolidation before new product surface
 
-This document preserves the current product/engineering assessment and distinguishes shipped behavior from planned work. The longer-term run architecture ideas remain exploratory in [`run-architecture-roadmap.md`](run-architecture-roadmap.md); this document is the near-term source of truth.
+This document preserves the assessment, implementation record, and acceptance
+criteria for the July 2026 reliability consolidation. It is not a current work
+tracker. Product direction now lives in [`direction.md`](direction.md), changing
+status belongs in the issue tracker, and executor-ready work lives under
+[`plans/`](../plans/).
 
 ## Assessment
 
@@ -96,14 +100,24 @@ references/files, stable shape, and secret redaction.
 remote provider/model connectivity probes, and a generalized config framework.
 Current provenance remains entry-level where source paths are reliable.
 
-## Remaining Risks and Decisions
+## Closeout and deferred risks
 
-1. **Shell fail-open on unsupported hosts:** `sandboxCommand` still warns and continues when bubblewrap is unavailable or the platform is unsupported. Decide whether restricted runs should fail closed, require an explicit opt-out, or retain compatibility. This is the most important remaining security decision.
-2. **Protected shell paths:** `protectedPaths` are not translated into deny rules inside writable roots. Direct `write`/`edit` are protected, but sandboxed bash can still mutate `.git`, `.karl`, or `.env` within the writable workspace. Fixing this requires careful Seatbelt and bubblewrap mount/rule ordering and cross-platform tests.
-3. **Read policy:** reads remain global. If read-only routes are expected to mean “repository-only,” introduce a separate explicit read scope rather than silently changing the current tool contract.
-4. **TOCTOU:** canonical authorization occurs before mutation. A hostile concurrent process could swap path components afterward. Full descriptor-relative mutation would add complexity and should be justified by threat model.
-5. **CI platform coverage:** normal CI is Linux-only; releases test Linux and macOS on tags. Sandbox policy generation and enforcement deserve isolated tests that do not depend on host availability.
+The quality gate, fail-closed restricted shell behavior, protected workspace
+paths, and configuration diagnostics described above landed together in commit
+`1ab5a69`. This handoff's former “Best Next Task” became stale once those slices
+were implemented, which is why live status no longer belongs in this document.
 
-## Best Next Task
+Known deferred questions remain useful inputs to future issues:
 
-Harden bash sandbox behavior as one focused slice: make unavailable sandbox handling an explicit policy (prefer fail-closed for restricted runs), enforce protected workspace paths for shell writes on both Seatbelt and bubblewrap, and add host-independent policy-generation tests plus available-platform smoke tests. Do not begin config diagnostics until that boundary is resolved.
+1. Reads remain global; repository-only read routes need a separate explicit
+   scope rather than a silent contract change.
+2. Canonical path authorization still has a theoretical time-of-check/time-of-use
+   race against a hostile concurrent process.
+3. Normal CI is Linux-only; macOS sandbox behavior is exercised on tagged
+   release jobs and conditional host smoke tests.
+4. Configuration provenance remains entry-level rather than field-by-field.
+5. Provider connectivity probes and exhaustive schema validation remain
+   deferred.
+
+Current priorities and dependencies are maintained in
+[`docs/direction.md`](direction.md) and [`plans/README.md`](../plans/README.md).

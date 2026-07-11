@@ -55,13 +55,19 @@ karl skills           # Manage agent skills
 
 ## Documentation
 
+- [Product Contract](PRODUCT.md)
+- [Repository Workflow](WORKFLOW.md)
+- [Product Direction](docs/direction.md)
+- [Work Tracking](docs/work-tracking.md)
+- [Architecture Decisions](docs/decisions/)
+- [Implementation Plans](plans/README.md)
 - [CLI Reference](docs/cli-reference.md)
 - [Configuration](docs/configuration.md)
 - [Tools](docs/tools.md)
 - [TUI](docs/tui.md)
 - [Volley Mode](docs/volley-mode.md)
 - [Architecture](docs/architecture.md)
-- [Current Consolidation Roadmap / Handoff](docs/current-consolidation-roadmap.md)
+- [July 2026 Consolidation Handoff (historical)](docs/current-consolidation-roadmap.md)
 - [Run Architecture Roadmap (exploratory)](docs/run-architecture-roadmap.md)
 - [Agent Skills](packages/karl/AGENT_SKILLS.md)
 

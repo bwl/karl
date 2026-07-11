@@ -1,0 +1,98 @@
+name: Karl work item
+description: Shape a feature, reliability task, spike, decision, or maintenance item
+title: ""
+labels: []
+body:
+  - type: dropdown
+    id: type
+    attributes:
+      label: Type
+      options:
+        - Feature
+        - Reliability
+        - Spike
+        - Decision
+        - Documentation
+        - Maintenance
+    validations:
+      required: true
+  - type: dropdown
+    id: priority
+    attributes:
+      label: Priority
+      options:
+        - P1
+        - P2
+        - P3
+    validations:
+      required: true
+  - type: input
+    id: area
+    attributes:
+      label: Area
+      description: Journal, routing, context, UX, models, security, configuration, release, or another explicit area
+    validations:
+      required: true
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem and outcome
+      description: What concrete problem exists, who experiences it, and what will be true when this succeeds?
+    validations:
+      required: true
+  - type: textarea
+    id: non_goals
+    attributes:
+      label: Non-goals and boundaries
+      description: Name adjacent work, files, systems, and behaviors that must remain untouched.
+    validations:
+      required: true
+  - type: textarea
+    id: acceptance
+    attributes:
+      label: Acceptance criteria
+      description: Use machine-checkable outcomes where possible.
+      placeholder: |
+        - [ ] ...
+        - [ ] ...
+    validations:
+      required: true
+  - type: textarea
+    id: verification
+    attributes:
+      label: Verification
+      description: List exact commands and expected results.
+      placeholder: |
+        bun run check
+        bun run --cwd packages/karl test-skills
+        git diff --check
+    validations:
+      required: true
+  - type: textarea
+    id: dependencies
+    attributes:
+      label: Dependencies and blockers
+      description: Link blocking issues or write "None".
+    validations:
+      required: true
+  - type: textarea
+    id: safety
+    attributes:
+      label: Safety, privacy, and compatibility constraints
+      description: Include workspace isolation, protected state, secret handling, migration, or compatibility constraints.
+    validations:
+      required: true
+  - type: input
+    id: plan
+    attributes:
+      label: Implementation plan
+      description: Link the self-contained plan for medium/high-risk work, or explain why none is needed.
+    validations:
+      required: true
+  - type: textarea
+    id: handoff
+    attributes:
+      label: Expected handoff
+      description: What evidence is required for Human Review, and who can mark this Done?
+    validations:
+      required: true
