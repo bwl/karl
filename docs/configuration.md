@@ -149,6 +149,29 @@ karl run --context "You are a security expert" "review this"
 karl run --context-file system-prompt.txt "analyze the architecture"
 ```
 
+### Ivo context ownership
+
+Ivo owns saved context content and its native metadata:
+
+```text
+.ivo/contexts/<id>.xml
+.ivo/contexts/<id>.meta.json
+```
+
+Karl never moves or rewrites those files. Context created through Karl's
+orchestrator is forced to Ivo's XML format so selected file identities remain
+inspectable, then adapted into an atomic manifest at:
+
+```text
+.karl/contexts/<id>.manifest.json
+```
+
+The Ivo ID remains the content-derived pack ID. Karl's separate manifest hash
+covers its versioned metadata. Use `karl context show <id>` and
+`karl context diff <old> <new>` to inspect these inputs. Packs created by older
+versions of Ivo or Karl remain readable as legacy packs; Karl does not migrate,
+delete, or rewrite them automatically.
+
 **No session state.** Each invocation is fresh. For multi-turn work, use a full coding agent and delegate to Karl for side tasks.
 
 ## History, Retention, and Privacy

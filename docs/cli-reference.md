@@ -189,6 +189,30 @@ cap nested strings and collections. `--full` expands only the stored, already
 bounded/redacted payload. It cannot recover data discarded by redaction or
 truncation.
 
+## Context Manifests
+
+```bash
+karl context show <id> [--json] [--content] [--cwd <path>]
+karl context diff <old> <new> [--json] [--cwd <path>]
+```
+
+Ivo remains the owner of pack content under `.ivo/contexts/`. When Karl's
+orchestrator creates an Ivo XML pack, Karl atomically writes a provider-neutral
+manifest under `.karl/contexts/` containing the source HEAD, pack hash, token
+usage, and ordered selected-file paths, hashes, and optional reasons. It does
+not move or rewrite Ivo files.
+
+`context show` reports current, stale, and missing source files without dumping
+the pack. Full XML appears only with explicit `--content`. `context diff`
+reports deterministic path-sorted additions, removals, and content changes.
+Existing Ivo packs without Karl manifests remain inspectable as `legacy`, with
+the reduced metadata actually available.
+
+Runs launched by the orchestrator journal the context manifest ID and hash in a
+`context_linked` event. They do not copy the full pack or expanded system prompt
+into the history record, so the manifest remains a stable reference even after
+working files change.
+
 ## Power User Patterns
 
 ### Shell aliases

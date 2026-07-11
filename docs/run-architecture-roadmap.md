@@ -237,6 +237,12 @@ The business/process vocabulary should be explicit. Karl should not reinvent
 
 ### 7. Ivo Context Gate
 
+Implementation note (2026-07-11): Ivo XML packs now receive atomic Karl
+manifests with ordered source-file hashes, token usage, source HEAD, and stable
+pack/manifest hashes. `karl context show` and `context diff` expose them, and
+orchestrated child runs journal only the validated manifest reference. Making a
+manifest mandatory for particular route classes remains future policy work.
+
 Ivo should become the context quality gate for non-trivial repo work.
 
 Possible rule:

@@ -6,6 +6,7 @@
 
 ## Status
 
+- **State**: DONE
 - **Priority**: P2
 - **Effort**: M
 - **Risk**: MED
@@ -74,11 +75,11 @@ Cover safe paths, atomicity, legacy packs, stable IDs, manifest validation, sour
 
 ## Done criteria
 
-- [ ] Every new pack has a versioned inspectable manifest.
-- [ ] Existing Ivo packs remain usable.
-- [ ] Show/diff are deterministic and safe.
-- [ ] Runs reference packs by ID/hash rather than duplicating content.
-- [ ] Full gates pass; scope is clean.
+- [x] Every new pack has a versioned inspectable manifest.
+- [x] Existing Ivo packs remain usable.
+- [x] Show/diff are deterministic and safe.
+- [x] Runs reference packs by ID/hash rather than duplicating content.
+- [x] Full gates pass; scope is clean.
 
 ## STOP conditions
 

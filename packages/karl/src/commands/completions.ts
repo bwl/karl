@@ -14,7 +14,7 @@ const COMMANDS = [
   'init', 'setup',
   'providers', 'models', 'stacks', 'skills',
   'config',
-  'info', 'status', 'history', 'logs', 'jobs',
+  'info', 'status', 'history', 'context', 'logs', 'jobs',
   'previous', 'prev', 'last',
   'tldr', 'help',
   'agent', 'claude',
@@ -32,9 +32,10 @@ const SUBCOMMANDS: Record<string, string[]> = {
   config: ['tui', 'doctor', 'show', 'edit', 'set'],
   jobs: ['clean'],
   history: ['list', 'show', 'clear'],
-  route: ['plan', 'select', 'execute', 'explain'],
-  routes: ['plan', 'select', 'execute', 'explain'],
-  broker: ['plan', 'select', 'execute', 'explain'],
+  context: ['show', 'diff'],
+  route: ['plan', 'select', 'architect', 'execute', 'explain'],
+  routes: ['plan', 'select', 'architect', 'execute', 'explain'],
+  broker: ['plan', 'select', 'architect', 'execute', 'explain'],
   completions: ['bash', 'zsh', 'fish'],
   debugdesign: ['realistic', 'stress', 'errors', 'all'],
   dd: ['realistic', 'stress', 'errors', 'all']
@@ -85,6 +86,7 @@ _karl_completions() {
     local stacks_cmds="${SUBCOMMANDS.stacks.join(' ')}"
     local skills_cmds="${SUBCOMMANDS.skills.join(' ')}"
     local jobs_cmds="${SUBCOMMANDS.jobs.join(' ')}"
+    local context_cmds="${SUBCOMMANDS.context.join(' ')}"
     local route_cmds="${SUBCOMMANDS.route.join(' ')}"
     local completions_cmds="${SUBCOMMANDS.completions.join(' ')}"
     local debugdesign_cmds="${SUBCOMMANDS.debugdesign.join(' ')}"
@@ -135,11 +137,19 @@ _karl_completions() {
             COMPREPLY=($(compgen -W "$jobs_cmds" -- "$cur"))
             return
             ;;
+        context)
+            if [[ \${cword} -eq 2 ]]; then
+                COMPREPLY=($(compgen -W "$context_cmds" -- "$cur"))
+            elif [[ "$cur" == -* ]]; then
+                COMPREPLY=($(compgen -W "--json -j --content --cwd --help -h" -- "$cur"))
+            fi
+            return
+            ;;
         route|routes|broker)
             if [[ \${cword} -eq 2 ]]; then
                 COMPREPLY=($(compgen -W "$route_cmds" -- "$cur"))
             elif [[ "$cur" == -* ]]; then
-                COMPREPLY=($(compgen -W "--json -j --route -r --cwd --help -h" -- "$cur"))
+                COMPREPLY=($(compgen -W "--json -j --route -r --recipe --yes --approve --verify --cwd --help -h" -- "$cur"))
             fi
             return
             ;;
@@ -335,11 +345,20 @@ _karl() {
                     local -a subcmds=('clean:Cleanup old completed jobs')
                     _describe 'subcommand' subcmds
                     ;;
+                context)
+                    local -a subcmds=('show:Inspect a context manifest' 'diff:Compare two context manifests')
+                    if (( CURRENT == 2 )); then
+                        _describe 'subcommand' subcmds
+                    else
+                        _arguments '--json[JSON output]' '-j[JSON output]' '--content[Include full pack content]' '--cwd[Working directory]:directory:_files -/'
+                    fi
+                    ;;
                 route|routes|broker)
                     local -a subcmds=(
                         'plan:Print a brokered run plan'
                         'select:Materialize a selected route'
-                        'execute:Alias for select'
+                        'architect:Compile the evidence-led patch recipe'
+                        'execute:Execute an approved recipe'
                         'explain:Alias for plan'
                     )
                     if (( CURRENT == 2 )); then
@@ -459,13 +478,25 @@ complete -c karl -n "__fish_seen_subcommand_from skills" -a "validate" -d "Valid
 # jobs subcommands
 complete -c karl -n "__fish_seen_subcommand_from jobs" -a "clean" -d "Cleanup old completed jobs"
 
+# context subcommands
+complete -c karl -n "__fish_seen_subcommand_from context" -a "show" -d "Inspect a context manifest"
+complete -c karl -n "__fish_seen_subcommand_from context" -a "diff" -d "Compare two context manifests"
+complete -c karl -n "__fish_seen_subcommand_from context" -l json -s j -d "JSON output"
+complete -c karl -n "__fish_seen_subcommand_from context" -l content -d "Include full pack content"
+complete -c karl -n "__fish_seen_subcommand_from context" -l cwd -d "Working directory" -r
+
 # route subcommands
 complete -c karl -n "__fish_seen_subcommand_from route routes broker" -a "plan" -d "Print a brokered run plan"
 complete -c karl -n "__fish_seen_subcommand_from route routes broker" -a "select" -d "Materialize a selected route"
-complete -c karl -n "__fish_seen_subcommand_from route routes broker" -a "execute" -d "Alias for select"
+complete -c karl -n "__fish_seen_subcommand_from route routes broker" -a "architect" -d "Compile the evidence-led patch recipe"
+complete -c karl -n "__fish_seen_subcommand_from route routes broker" -a "execute" -d "Execute an approved recipe"
 complete -c karl -n "__fish_seen_subcommand_from route routes broker" -a "explain" -d "Alias for plan"
 complete -c karl -n "__fish_seen_subcommand_from route routes broker" -l json -s j -d "JSON output"
 complete -c karl -n "__fish_seen_subcommand_from route routes broker" -l route -s r -d "Route id or name" -xa "coder readonly panel cheap bodyplan direct"
+complete -c karl -n "__fish_seen_subcommand_from route routes broker" -l recipe -d "Execution recipe" -xa "evidence-led-patch"
+complete -c karl -n "__fish_seen_subcommand_from route routes broker" -l yes -d "Approve non-interactive execution"
+complete -c karl -n "__fish_seen_subcommand_from route routes broker" -l approve -d "Approve non-interactive execution"
+complete -c karl -n "__fish_seen_subcommand_from route routes broker" -l verify -d "Verification command" -r
 complete -c karl -n "__fish_seen_subcommand_from route routes broker" -l cwd -d "Working directory" -r
 
 # completions subcommands
@@ -541,6 +572,7 @@ function getCommandDescription(cmd: string): string {
     info: 'Show system info',
     status: 'Show status',
     history: 'Show run history',
+    context: 'Inspect context manifests',
     logs: 'Show logs',
     jobs: 'List background jobs',
     previous: 'Print last response',

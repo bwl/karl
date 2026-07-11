@@ -696,6 +696,135 @@ async function testConfig() {
 }
 
 // ============================================================================
+// Context Manifest Tests
+// ============================================================================
+
+async function testContextManifests() {
+  suite('Context Manifests');
+  const {
+    createIvoContextManifest,
+    diffContextManifests,
+    generateContextId,
+    getManifestPath,
+    hashContextContent,
+    inspectContextPack,
+    loadContextManifest,
+    loadContextPack,
+    validateContextManifest,
+  } = await import('../src/context-store.js');
+  const repo = join(TEST_DIR, 'context-repo');
+  const ivoDir = join(repo, '.ivo', 'contexts');
+  mkdirSync(ivoDir, { recursive: true });
+  writeFileSync(join(repo, 'a.ts'), 'export const a = 1;\n');
+  writeFileSync(join(repo, 'b.ts'), 'export const b = 1;\n');
+  writeFileSync(join(repo, 'c.ts'), 'export const c = 1;\n');
+  for (const args of [
+    ['init'], ['config', 'user.email', 'fixture@example.com'], ['config', 'user.name', 'Karl Fixture'],
+    ['add', '.'], ['commit', '-m', 'context fixture'],
+  ]) {
+    const result = Bun.spawnSync(['git', ...args], { cwd: repo, stdout: 'pipe', stderr: 'pipe' });
+    assertEqual(result.exitCode, 0, result.stderr.toString());
+  }
+
+  function saveIvo(xml: string, task: string): string {
+    const id = generateContextId(xml);
+    writeFileSync(join(ivoDir, `${id}.xml`), xml);
+    writeFileSync(join(ivoDir, `${id}.meta.json`), JSON.stringify({ id, task, files: 2, tokens: 120, budget: 500, createdAt: '2026-07-11T00:00:00.000Z', format: 'xml' }));
+    return id;
+  }
+
+  const oldXml = '<ivo_context><files><file path="b.ts" reason="keyword"><content><![CDATA[old]]></content></file><file path="a.ts"><content><![CDATA[a]]></content></file></files></ivo_context>';
+  const oldId = saveIvo(oldXml, 'old context');
+  const oldManifest = await createIvoContextManifest(oldId, repo);
+
+  await test('Ivo adapter saves and round-trips a versioned atomic manifest', async () => {
+    const loaded = await loadContextManifest(oldId, repo);
+    assert(loaded !== null);
+    assertEqual(loaded!.kind, 'karl.contextManifest');
+    assertEqual(loaded!.schemaVersion, 1);
+    assertEqual(loaded!.selectedFiles.map(file => file.path).join(','), 'b.ts,a.ts');
+    assertEqual(loaded!.selectedFiles[0].reason, 'keyword');
+    assertEqual(loaded!.packContentHash, hashContextContent(oldXml));
+    assert(existsSync(getManifestPath(oldId, repo)));
+  });
+
+  await test('manifest validation rejects traversal and absolute selected paths', async () => {
+    for (const badPath of ['../escape.ts', '/tmp/escape.ts']) {
+      const copy = structuredClone(oldManifest);
+      copy.selectedFiles[0].path = badPath;
+      await assertRejects(async () => validateContextManifest(copy), badPath.startsWith('/') ? 'repo-relative' : 'escapes');
+    }
+  });
+
+  await test('duplicate content ID reuses the published manifest', async () => {
+    const duplicate = await createIvoContextManifest(oldId, repo, { createdAt: '2099-01-01T00:00:00.000Z' });
+    assertEqual(duplicate.manifestHash, oldManifest.manifestHash);
+    assertEqual(duplicate.createdAt, oldManifest.createdAt);
+  });
+
+  await test('missing content and interrupted temporary writes are never published', async () => {
+    await assertRejects(() => loadContextPack('abcdef0', repo), 'content is missing');
+    const interruptedId = 'abcdef1';
+    mkdirSync(join(repo, '.karl', 'contexts'), { recursive: true });
+    writeFileSync(`${getManifestPath(interruptedId, repo)}.tmp-interrupted`, '{}');
+    assertEqual(await loadContextManifest(interruptedId, repo), null);
+  });
+
+  const legacyXml = '<ivo_context><files><file path="a.ts"></file></files></ivo_context>';
+  const legacyId = saveIvo(legacyXml, 'legacy context');
+  await test('existing Ivo packs without Karl manifests remain readable as legacy', async () => {
+    const legacy = await loadContextPack(legacyId, repo);
+    assertEqual(legacy.kind, 'karl.legacyContextPack');
+    assert('legacy' in legacy && legacy.legacy);
+  });
+
+  writeFileSync(join(repo, 'b.ts'), 'export const b = 2;\n');
+  const newXml = '<ivo_context><files><file path="c.ts"></file><file path="b.ts"></file></files></ivo_context>';
+  const newId = saveIvo(newXml, 'new context');
+  await createIvoContextManifest(newId, repo);
+
+  await test('inspection reports source drift and diff ordering is deterministic', async () => {
+    const inspected = await inspectContextPack(oldId, repo);
+    assert('fileStates' in inspected && inspected.fileStates?.some(file => file.path === 'b.ts' && file.state === 'stale'));
+    const diff = await diffContextManifests(oldId, newId, repo);
+    assertEqual(diff.added.map(file => file.path).join(','), 'c.ts');
+    assertEqual(diff.removed.map(file => file.path).join(','), 'a.ts');
+    assertEqual(diff.changed.map(file => file.path).join(','), 'b.ts');
+  });
+
+  const karl = join(import.meta.dir, '../src/cli.ts');
+  async function contextCli(args: string[]): Promise<{ stdout: string; exitCode: number }> {
+    const proc = Bun.spawn(['bun', karl, 'context', ...args, '--cwd', repo], { stdout: 'pipe', stderr: 'pipe' });
+    return { stdout: await new Response(proc.stdout).text(), exitCode: await proc.exited };
+  }
+  await test('context show and diff expose stable JSON without implicit content', async () => {
+    const shown = await contextCli(['show', oldId, '--json']);
+    assertEqual(shown.exitCode, 0);
+    const showJson = JSON.parse(shown.stdout) as { kind: string; content?: string; fileStates: unknown[] };
+    assertEqual(showJson.kind, 'karl.contextManifest');
+    assert(!showJson.content);
+    assert(Array.isArray(showJson.fileStates));
+    const withContent = JSON.parse((await contextCli(['show', oldId, '--json', '--content'])).stdout) as { content: string };
+    assertContains(withContent.content, '<ivo_context>');
+    const diff = JSON.parse((await contextCli(['diff', oldId, newId, '--json'])).stdout) as { kind: string; added: Array<{ path: string }> };
+    assertEqual(diff.kind, 'karl.contextDiff');
+    assertEqual(diff.added[0].path, 'c.ts');
+  });
+
+  await test('a fake run journals only the durable manifest reference', async () => {
+    const { HistoryStore } = await import('../src/history.js');
+    const store = new HistoryStore(join(repo, 'context-history.db'));
+    store.startRun({ id: 'context-linked-run', createdAt: Date.now(), cwd: repo, command: 'fake', prompt: 'use context' });
+    store.appendRunEvent('context-linked-run', { type: 'context_linked', payload: { provider: 'ivo', manifestId: oldId, manifestHash: oldManifest.manifestHash } });
+    writeFileSync(join(repo, 'a.ts'), 'changed after fake run\n');
+    const event = store.getRunEvents('context-linked-run').find(entry => entry.type === 'context_linked');
+    store.close();
+    assertEqual((event!.payload as { manifestHash: string }).manifestHash, oldManifest.manifestHash);
+    assert(!JSON.stringify(event).includes(oldXml), 'Journal duplicated full context content');
+  });
+}
+
+// ============================================================================
 // Run Architecture Tests
 // ============================================================================
 
@@ -1103,6 +1232,7 @@ async function main() {
     await testSchemaSanitization();
     await testHistory();
     await testConfig();
+    await testContextManifests();
     await testRunArchitecture();
     await testCLI();
     await testIntegration();

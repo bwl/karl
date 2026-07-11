@@ -17,6 +17,7 @@ import { createInterface } from 'readline';
 import { TaskRunError } from './errors.js';
 import type { AgentEvent } from './agent-loop.js';
 import { buildHistoryId, createHistoryStore, type HistoryRunEventInput, type HistoryThinkingEntry } from './history.js';
+import { loadContextManifest } from './context-store.js';
 
 /**
  * Built-in commands that are handled specially.
@@ -45,6 +46,7 @@ const BUILTIN_COMMANDS = new Set([
   'info',      // System info
   'status',    // Alias for info
   'history',   // Run history
+  'context',   // Inspect context manifests
   'logs',      // Alias for history (or job logs)
   'jobs',      // List background jobs
   'previous',  // Last response shortcut
@@ -811,6 +813,12 @@ async function main() {
     await handleCompletionsCommand(args.slice(1));
     return;
   }
+  // Handle context manifest inspection
+  else if (firstArg === 'context') {
+    const { handleContextCommand } = await import('./commands/context.js');
+    await handleContextCommand(args.slice(1));
+    return;
+  }
   // Handle 'serve' command - JSON-RPC server for IPC
   else if (firstArg === 'serve') {
     const { handleServeCommand } = await import('./commands/serve.js');
@@ -1086,6 +1094,14 @@ async function main() {
   let lastThinking = '';
   const diffs: ToolDiff[] = [];
   const contextInline = effectiveOptions.context;
+  let contextManifestRef: { id: string; hash: string } | undefined;
+  if (process.env.KARL_CONTEXT_MANIFEST_ID && process.env.KARL_CONTEXT_MANIFEST_HASH && contextFilePath) {
+    const manifest = await loadContextManifest(process.env.KARL_CONTEXT_MANIFEST_ID, cwd);
+    const expectedContentPath = manifest ? path.resolve(cwd, manifest.packContentPath) : undefined;
+    if (manifest && manifest.manifestHash === process.env.KARL_CONTEXT_MANIFEST_HASH && expectedContentPath === contextFilePath) {
+      contextManifestRef = { id: manifest.contextId, hash: manifest.manifestHash };
+    }
+  }
   const diffConfig = recordHistory
     ? { maxBytes: config.history?.maxDiffBytes, maxLines: config.history?.maxDiffLines }
     : undefined;
@@ -1108,7 +1124,8 @@ async function main() {
       providerType: resolvedModel.providerConfig?.type
     },
     tools: config.tools,
-    retry: config.retry
+    retry: config.retry,
+    contextManifest: contextManifestRef
   };
 
   let historyWarningShown = false;
@@ -1143,13 +1160,19 @@ async function main() {
         skill: effectiveOptions.skill,
         prompt: finalTask,
         contextFilePath,
-        contextFileRaw,
+        contextFileRaw: contextManifestRef ? undefined : contextFileRaw,
         contextInline,
-        systemPrompt,
+        systemPrompt: contextManifestRef ? undefined : systemPrompt,
         configSnapshot,
         parentId,
         tags: effectiveOptions.tags
       });
+      if (contextManifestRef) {
+        historyStore.appendRunEvent(historyId, {
+          type: 'context_linked',
+          payload: { provider: 'ivo', manifestId: contextManifestRef.id, manifestHash: contextManifestRef.hash }
+        });
+      }
     } catch (error) {
       warnHistoryOnce(error);
       recordHistory = false;

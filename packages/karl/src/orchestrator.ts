@@ -13,6 +13,7 @@ import type { KarlConfig } from './types.js';
 import { resolveAgentModel } from './config.js';
 import { getProviderOAuthToken } from './oauth.js';
 import { StackManager } from './stacks.js';
+import { createIvoContextManifest, loadContextManifest } from './context-store.js';
 
 // ============================================================================
 // Types
@@ -375,6 +376,7 @@ interface IvoResult {
  * Get path to ivo context file.
  */
 function getIvoContextPath(contextId: string): string {
+  if (!/^[a-f0-9]{7,64}$/.test(contextId)) throw new Error(`Invalid Ivo context ID: ${contextId}`);
   return join(process.cwd(), '.ivo', 'contexts', `${contextId}.xml`);
 }
 
@@ -385,7 +387,7 @@ function getIvoContextPath(contextId: string): string {
  */
 async function runIvoContext(keywords: string, budget: number): Promise<IvoResult> {
   return new Promise((resolve, reject) => {
-    const child = spawn('ivo', ['context', keywords, '--budget', String(budget)], {
+    const child = spawn('ivo', ['context', keywords, '--budget', String(budget), '--format', 'xml'], {
       stdio: ['pipe', 'pipe', 'pipe'],
       env: { ...process.env, FORCE_COLOR: '0' }
     });
@@ -467,6 +469,11 @@ function createIvoContextTool(emit: Emitter): ToolDefinition {
 
       try {
         const result = await runIvoContext(keywords, budget);
+        const manifest = await createIvoContextManifest(result.contextId, process.cwd(), {
+          task: keywords,
+          budget,
+          actualTokens: result.tokens,
+        });
 
         emit({
           type: 'ivo_end',
@@ -480,7 +487,7 @@ function createIvoContextTool(emit: Emitter): ToolDefinition {
         return {
           content: [{
             type: 'text',
-            text: `Context ready: ${result.contextId}\nFiles: ${result.files} | Tokens: ${result.tokens}/${budget} (${budgetUsage})`
+            text: `Context ready: ${result.contextId}\nManifest: ${manifest.manifestHash}\nFiles: ${result.files} | Tokens: ${result.tokens}/${budget} (${budgetUsage})`
           }]
         };
       } catch (error) {
@@ -876,18 +883,22 @@ function createKarlTool(
 
       emit({ type: 'karl_start', command, task });
 
-      return new Promise((resolve) => {
-        const args = [...karlInvocation.argsPrefix, command, task, ...flags];
-
-        // Add context file if context_id provided (loads from .ivo/contexts/)
-        if (context_id) {
-          const contextPath = getIvoContextPath(context_id);
-          args.push('--context-file', contextPath);
+      const args = [...karlInvocation.argsPrefix, command, task, ...flags];
+      const childEnv: NodeJS.ProcessEnv = { ...process.env, FORCE_COLOR: '0' };
+      if (context_id) {
+        const contextPath = getIvoContextPath(context_id);
+        args.push('--context-file', contextPath);
+        const manifest = await loadContextManifest(context_id, process.cwd());
+        if (manifest) {
+          childEnv.KARL_CONTEXT_MANIFEST_ID = manifest.contextId;
+          childEnv.KARL_CONTEXT_MANIFEST_HASH = manifest.manifestHash;
         }
+      }
 
+      return new Promise((resolve) => {
         const child = spawn(karlInvocation.command, args, {
           stdio: ['pipe', 'pipe', 'pipe'],
-          env: { ...process.env, FORCE_COLOR: '0' }
+          env: childEnv
         });
 
         let stdout = '';
