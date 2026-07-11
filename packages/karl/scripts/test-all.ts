@@ -10,7 +10,7 @@
  * - CLI commands
  */
 
-import { existsSync, mkdirSync, rmSync, writeFileSync, readFileSync, symlinkSync } from 'fs';
+import { chmodSync, existsSync, mkdirSync, rmSync, writeFileSync, readFileSync, symlinkSync } from 'fs';
 import { join } from 'path';
 import { tmpdir } from 'os';
 import { Database } from 'bun:sqlite';
@@ -696,6 +696,57 @@ async function testConfig() {
 }
 
 // ============================================================================
+// Run Architecture Tests
+// ============================================================================
+
+async function testRunArchitecture() {
+  suite('Run Architecture');
+
+  const { buildRunPlan } = await import('../src/run-broker.js');
+  const { compileEvidenceLedPatch, validateRunArchitecture } = await import('../src/run-architecture.js');
+  const plan = buildRunPlan({
+    task: 'implement a focused verifier',
+    context: {
+      cwd: TEST_DIR,
+      defaultModelLabel: 'test::local/test-model',
+      hasDefaultModel: true,
+      openRouterConfigured: true,
+      openRouterAuthenticated: true,
+    },
+  });
+  const valid = compileEvidenceLedPatch(plan, { sourceHead: 'abc123', verification: ['bun test'] });
+
+  await test('compiler emits the one fixed evidence-led recipe', () => {
+    assertEqual(valid.kind, 'karl.runArchitecture');
+    assertEqual(valid.version, 1);
+    assertEqual(valid.recipe, 'evidence-led-patch');
+    assertEqual(valid.phases.map(phase => phase.id).join(','), 'evidence,scope_gate,patch,verify,handoff');
+    assertEqual(valid.phases[0].tools.mode, 'read-only');
+    assertEqual(valid.phases[2].worktree, 'detached-required');
+    assertEqual(valid.phases[3].checks[0], 'bun test');
+    assertEqual(valid.mutationRoute.execution.mode, 'karl-magic');
+    assertEqual(valid.mutationRoute.model.provider, 'codex');
+    validateRunArchitecture(valid);
+  });
+
+  const rejectionCases: Array<[string, string, (copy: typeof valid) => void]> = [
+    ['unknown phase', 'phase order', copy => { (copy.phases[0] as { id: string }).id = 'mystery'; }],
+    ['cycle', 'cycle', copy => { copy.phases[0].dependsOn = ['handoff']; }],
+    ['read-only mutation tool', 'mutation tools', copy => { copy.phases[0].tools.allowed = ['write']; }],
+    ['patch without worktree', 'detached worktree', copy => { copy.phases[2].worktree = 'none'; }],
+    ['missing human gate', 'human scope gate', copy => { copy.phases[1].requiresHumanApproval = false; }],
+    ['missing verification', 'verification checks', copy => { copy.phases[3].checks = []; }],
+  ];
+  for (const [name, expected, mutate] of rejectionCases) {
+    await test(`validator rejects ${name}`, async () => {
+      const copy = structuredClone(valid);
+      mutate(copy);
+      await assertRejects(async () => validateRunArchitecture(copy), expected);
+    });
+  }
+}
+
+// ============================================================================
 // CLI Command Tests (subprocess)
 // ============================================================================
 
@@ -706,6 +757,18 @@ async function testCLI() {
 
   async function runKarl(args: string, env: Record<string, string> = {}): Promise<{ stdout: string; stderr: string; exitCode: number }> {
     const proc = Bun.spawn(['bun', karl, ...args.split(' ')], {
+      stdout: 'pipe',
+      stderr: 'pipe',
+      env: { ...process.env, NO_COLOR: '1', ...env }
+    });
+    const stdout = await new Response(proc.stdout).text();
+    const stderr = await new Response(proc.stderr).text();
+    const exitCode = await proc.exited;
+    return { stdout, stderr, exitCode };
+  }
+
+  async function runKarlArgs(args: string[], env: Record<string, string> = {}): Promise<{ stdout: string; stderr: string; exitCode: number }> {
+    const proc = Bun.spawn(['bun', karl, ...args], {
       stdout: 'pipe',
       stderr: 'pipe',
       env: { ...process.env, NO_COLOR: '1', ...env }
@@ -794,6 +857,131 @@ async function testCLI() {
     assertEqual(output.run.terminalReason, 'succeeded');
     assert(output.events.some(event => event.type === 'tool_started'));
     assert(!stdout.includes('cli-secret-fixture'), 'History CLI leaked redacted environment content');
+  });
+
+  const recipeRoot = join(TEST_DIR, 'recipe-fixture');
+  const recipeRepo = join(recipeRoot, 'source');
+  const recipeHome = join(recipeRoot, 'home');
+  const worktreeParent = join(recipeRoot, 'worktrees');
+  const historyPath = join(recipeRoot, 'history.db');
+  mkdirSync(recipeRepo, { recursive: true });
+  mkdirSync(recipeHome, { recursive: true });
+  mkdirSync(worktreeParent, { recursive: true });
+  writeFileSync(join(recipeRepo, 'source.txt'), 'source stays unchanged\n');
+  writeFileSync(join(recipeRepo, '.karl.json'), JSON.stringify({
+    defaultModel: 'test',
+    providers: { local: { type: 'openai', apiKey: 'fixture' } },
+    models: { test: { provider: 'local', model: 'test-model' } },
+    history: { enabled: true, path: historyPath },
+  }));
+  for (const args of [
+    ['init'], ['config', 'user.email', 'fixture@example.com'], ['config', 'user.name', 'Karl Fixture'],
+    ['add', '.'], ['commit', '-m', 'fixture'],
+  ]) {
+    const result = Bun.spawnSync(['git', ...args], { cwd: recipeRepo, stdout: 'pipe', stderr: 'pipe' });
+    assertEqual(result.exitCode, 0, result.stderr.toString());
+  }
+
+  const fakeRunner = join(recipeRoot, 'fake-magic.ts');
+  writeFileSync(fakeRunner, `#!/usr/bin/env bun
+import { mkdirSync, writeFileSync } from 'fs';
+import { join } from 'path';
+const args = process.argv.slice(2);
+if (args[0] !== 'magic' || !args.includes('--worktree') || !args.includes('--require-clean')) {
+  throw new Error('route did not delegate through magic --worktree --require-clean');
+}
+const source = args[args.indexOf('--cwd') + 1];
+const parent = process.env.FAKE_WORKTREE_PARENT!;
+const worktree = join(parent, 'retained-' + Date.now() + '-' + Math.random().toString(36).slice(2));
+mkdirSync(parent, { recursive: true });
+const add = Bun.spawnSync(['git', '-C', source, 'worktree', 'add', '--detach', worktree, 'HEAD'], { stdout: 'pipe', stderr: 'pipe' });
+if (add.exitCode !== 0) throw new Error(add.stderr.toString());
+writeFileSync(join(worktree, 'patch.txt'), 'fake runner patch\\n');
+const failed = process.env.FAKE_RUNNER_MODE === 'fail';
+console.log(JSON.stringify({
+  id: 'fake-child', status: failed ? 'error' : 'success', cwd: worktree, worktree,
+  error: failed ? 'fake runner failure' : undefined,
+  receipt: { filesChanged: ['patch.txt'], commands: [] }
+}));
+process.exit(failed ? 1 : 0);
+`);
+  chmodSync(fakeRunner, 0o755);
+  const recipeEnv = {
+    HOME: recipeHome,
+    KARL_AGENT_COMMAND: `bun ${fakeRunner}`,
+    FAKE_WORKTREE_PARENT: worktreeParent,
+  };
+
+  await test('route architect emits the versioned fixed recipe without side effects', async () => {
+    const before = readFileSync(join(recipeRepo, 'source.txt'), 'utf8');
+    const { stdout, exitCode } = await runKarlArgs(['route', 'architect', '--json', '--cwd', recipeRepo, 'implement fixture patch'], recipeEnv);
+    assertEqual(exitCode, 0);
+    const architecture = JSON.parse(stdout) as { kind: string; version: number; phases: Array<{ id: string; tools: { mode: string }; worktree: string; checks: string[] }> };
+    assertEqual(architecture.kind, 'karl.runArchitecture');
+    assertEqual(architecture.version, 1);
+    assertEqual(architecture.phases.map(phase => phase.id).join(','), 'evidence,scope_gate,patch,verify,handoff');
+    assertEqual(architecture.phases[0].tools.mode, 'read-only');
+    assertEqual(architecture.phases[2].worktree, 'detached-required');
+    assert(architecture.phases[3].checks.length > 0);
+    assertEqual(readFileSync(join(recipeRepo, 'source.txt'), 'utf8'), before);
+    assertEqual(Bun.spawnSync(['git', '-C', recipeRepo, 'worktree', 'list', '--porcelain'], { stdout: 'pipe' }).stdout.toString().split('worktree ').length, 2);
+  });
+
+  await test('non-interactive execution requires approval before worktree creation', async () => {
+    const before = Bun.spawnSync(['git', '-C', recipeRepo, 'worktree', 'list', '--porcelain'], { stdout: 'pipe' }).stdout.toString();
+    const { stdout, exitCode } = await runKarlArgs(['route', 'execute', '--recipe', 'evidence-led-patch', '--json', '--cwd', recipeRepo, 'implement rejected patch'], recipeEnv);
+    assertEqual(exitCode, 1);
+    const handoff = JSON.parse(stdout) as { status: string; worktree?: string };
+    assertEqual(handoff.status, 'rejected');
+    assert(!handoff.worktree);
+    const after = Bun.spawnSync(['git', '-C', recipeRepo, 'worktree', 'list', '--porcelain'], { stdout: 'pipe' }).stdout.toString();
+    assertEqual(after, before);
+  });
+
+  await test('accepted recipe isolates changes, verifies, journals phases, and retains worktree', async () => {
+    const { stdout, exitCode } = await runKarlArgs([
+      'route', 'execute', '--recipe', 'evidence-led-patch', '--yes', '--json',
+      '--verify', 'test -f patch.txt', '--cwd', recipeRepo, 'implement accepted patch'
+    ], recipeEnv);
+    assertEqual(exitCode, 0);
+    const handoff = JSON.parse(stdout) as { runId: string; status: string; worktree: string; sourceTreeUnchanged: boolean; changedFiles: string[]; integration: string };
+    assertEqual(handoff.status, 'success');
+    assert(handoff.sourceTreeUnchanged);
+    assert(handoff.changedFiles.includes('patch.txt'));
+    assert(existsSync(join(handoff.worktree, 'patch.txt')));
+    assert(!existsSync(join(recipeRepo, 'patch.txt')));
+    assertContains(handoff.integration, 'no commit, merge, or push');
+    const { HistoryStore } = await import('../src/history.js');
+    const store = new HistoryStore(historyPath);
+    const phases = store.getRunEvents(handoff.runId)
+      .filter(event => event.type === 'phase_started')
+      .map(event => (event.payload as { phase: string }).phase);
+    store.close();
+    assertEqual(phases.join(','), 'evidence,scope_gate,patch,verify,handoff');
+  });
+
+  await test('verification failure returns review handoff and retains changed worktree', async () => {
+    const { stdout, exitCode } = await runKarlArgs([
+      'route', 'execute', '--recipe', 'evidence-led-patch', '--yes', '--json',
+      '--verify', 'test -f missing.txt', '--cwd', recipeRepo, 'implement failing patch'
+    ], recipeEnv);
+    assertEqual(exitCode, 1);
+    const handoff = JSON.parse(stdout) as { status: string; worktree: string; unresolvedFailures: string[] };
+    assertEqual(handoff.status, 'error');
+    assert(existsSync(join(handoff.worktree, 'patch.txt')));
+    assert(handoff.unresolvedFailures.some(failure => failure.includes('Verification failed')));
+  });
+
+  await test('runner failure retains its worktree for inspection', async () => {
+    const { stdout, exitCode } = await runKarlArgs([
+      'route', 'execute', '--recipe', 'evidence-led-patch', '--yes', '--json',
+      '--cwd', recipeRepo, 'implement runner failure'
+    ], { ...recipeEnv, FAKE_RUNNER_MODE: 'fail' });
+    assertEqual(exitCode, 1);
+    const handoff = JSON.parse(stdout) as { status: string; worktree: string; unresolvedFailures: string[] };
+    assertEqual(handoff.status, 'error');
+    assert(existsSync(join(handoff.worktree, 'patch.txt')));
+    assert(handoff.unresolvedFailures.includes('fake runner failure'));
   });
 }
 
@@ -915,6 +1103,7 @@ async function main() {
     await testSchemaSanitization();
     await testHistory();
     await testConfig();
+    await testRunArchitecture();
     await testCLI();
     await testIntegration();
   } finally {

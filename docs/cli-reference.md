@@ -27,6 +27,8 @@ The generated model uses `openrouter/fusion`; panel/judge overrides and
 ```bash
 karl route plan [--json] [--route <id|name>] [--cwd <path>] <task>
 karl route select [--json] [--route <id|name>] [--cwd <path>] <task>
+karl route architect [--json] [--verify <command>] [--cwd <path>] <task>
+karl route execute --recipe evidence-led-patch [--yes] [--json] [--verify <command>] [--cwd <path>] <task>
 ```
 
 `karl route` is the agent-facing two-step run broker. It interprets a task,
@@ -47,6 +49,38 @@ Route names currently include `coder`, `readonly`, `panel`, `cheap`, `bodyplan`,
 `recommended`, `alternatives`, `tools`, `availability`, and `execution`.
 Evidence audits and "do not edit" requests should route to `readonly`, which
 advertises `tools.mode: "read-only"` and omits write/edit tools.
+
+### Evidence-led patch recipe
+
+`route architect` compiles a versioned `karl.runArchitecture` without creating
+a worktree or starting a model. Karl currently supports exactly one executable
+recipe, `evidence-led-patch`, with these ordered phases:
+
+```text
+evidence -> scope_gate -> patch -> verify -> handoff
+```
+
+The evidence phase reads Git HEAD, branch, and status. Execution then requires
+interactive approval or an explicit `--yes`; non-interactive callers cannot
+mutate without that flag. After approval, Karl delegates through the existing
+`magic --worktree --require-clean` path. The patch and declared checks run in
+the same detached worktree, which is retained whether the run succeeds or
+fails. The source worktree is compared with its pre-run evidence at handoff.
+
+Verification defaults to `git diff --check`. Repeat `--verify` to declare the
+project checks the handoff must pass:
+
+```bash
+karl route architect --json --verify "bun run check" "implement the verifier"
+karl route execute --recipe evidence-led-patch --yes \
+  --verify "bun run check" --verify "bun test" \
+  "implement the verifier"
+```
+
+The handoff reports the retained path, changed files, command results,
+unresolved failures, and residual risk. Karl does not commit, merge, push, or
+delete the worktree. Each phase is also appended to the durable run journal;
+the delegated `magic` run is linked to the parent architecture run.
 
 ## Output Control
 

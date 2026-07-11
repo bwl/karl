@@ -443,7 +443,9 @@ export async function handleMagicCommand(args: string[]): Promise<void> {
 
   const runStartedAt = Date.now();
   const historyId = buildHistoryId(new Date(runStartedAt));
-  const statusWriter = createStatusWriter(sourceCwd, task, historyId);
+  // A scratch run must not create live-status files in the source worktree.
+  // Its durable journal and child process output remain available instead.
+  const statusWriter = opts.worktree ? null : createStatusWriter(sourceCwd, task, historyId);
   const history = opts.noHistory
     ? { store: null, config: undefined }
     : await createMagicHistoryStore(sourceCwd, opts.quiet, opts.json);
@@ -515,6 +517,7 @@ export async function handleMagicCommand(args: string[]): Promise<void> {
   let turnError: string | undefined;
   let latestDiff = '';
   let receipt: MagicReceipt | null = null;
+  let jsonPrinted = false;
   const thinkingEvents: HistoryThinkingEntry[] = [];
   const commandsByItemId = new Map<string, CommandRecord>();
   const commands: CommandRecord[] = [];
@@ -752,6 +755,7 @@ export async function handleMagicCommand(args: string[]): Promise<void> {
         result.error = turnError;
       }
       console.log(JSON.stringify(result, null, 2));
+      jsonPrinted = true;
     } else if (agentText && !agentText.endsWith('\n')) {
       process.stdout.write('\n');
     }
@@ -787,6 +791,24 @@ export async function handleMagicCommand(args: string[]): Promise<void> {
         tokens: tokenUsageFromEvent(tokenInfo),
         error: turnError,
       };
+    }
+
+    if (opts.json && !jsonPrinted) {
+      console.log(JSON.stringify({
+        id: historyId,
+        status: receipt.status,
+        result: agentText,
+        threadId: client.threadId,
+        model: threadInfo?.model,
+        reasoningEffort: effort,
+        cwd: runCwd,
+        sourceCwd: worktreeInfo ? sourceCwd : undefined,
+        worktree: worktreeInfo?.path,
+        durationMs,
+        receipt,
+        error: receipt.error,
+      }, null, 2));
+      jsonPrinted = true;
     }
 
     if (receipt.status === 'success') {
@@ -843,6 +865,7 @@ export async function handleMagicCommand(args: string[]): Promise<void> {
           toolsUsed: Array.from(toolsUsed),
           tokens: receipt.tokens,
           diffs: latestDiff ? [truncateDiff(latestDiff, history.config)] : undefined,
+          parentId: process.env.KARL_ROUTE_PARENT_ID || undefined,
           tags: ['magic', 'codex'],
         });
       } catch (error) {

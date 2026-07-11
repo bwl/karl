@@ -6,6 +6,7 @@
 
 ## Status
 
+- **State**: DONE
 - **Priority**: P1
 - **Effort**: L
 - **Risk**: HIGH
@@ -84,12 +85,12 @@ Use temporary repos and fake runners; never call a real model. Cover compiler in
 
 ## Done criteria
 
-- [ ] One recipe plans and executes end to end.
-- [ ] No mutation occurs before a human/explicit gate.
-- [ ] Source worktree remains unchanged; scratch worktree is retained.
-- [ ] Every phase is journaled and verification determines handoff status.
-- [ ] No general DAG or automatic integration behavior was added.
-- [ ] Full gates pass; scope is clean.
+- [x] One recipe plans and executes end to end.
+- [x] No mutation occurs before a human/explicit gate.
+- [x] Source worktree remains unchanged; scratch worktree is retained.
+- [x] Every phase is journaled and verification determines handoff status.
+- [x] No general DAG or automatic integration behavior was added.
+- [x] Full gates pass; scope is clean.
 
 ## STOP conditions
 

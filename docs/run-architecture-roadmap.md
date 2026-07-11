@@ -1,7 +1,7 @@
 # Karl Run Architecture Roadmap
 
-Status: planning
-Last updated: 2026-07-05
+Status: active; first execution tracer bullet implemented
+Last updated: 2026-07-11
 
 This document captures the outstanding design plans from the July 2026 Karl
 session. It is intentionally exploratory. The goal is to preserve the shape of
@@ -27,9 +27,15 @@ The current production surface is `karl route`:
   whether a route is no-tools, read-only, or read-write.
 - Read-only repo review is now a first-class route, not a side effect of prompt
   wording.
+- `karl route architect` compiles one deterministic, versioned architecture:
+  `evidence-led-patch`.
+- `karl route execute --recipe evidence-led-patch` now enforces an approval
+  gate, delegates through the existing retained-worktree path, runs declared
+  checks in that worktree, and journals every phase through handoff.
 
-This is useful, but it is still a route broker. It does not yet design a full
-run architecture.
+This is deliberately a tracer bullet, not general architecture support. Karl
+does not accept arbitrary recipes or graphs, schedule parallel nodes, or
+integrate the resulting patch.
 
 ## North Star
 
@@ -177,6 +183,12 @@ Failure behavior matters:
 
 ### 5. Build A Compiler And Policy Validator
 
+Implementation note (2026-07-11): the first narrow compiler is implemented for
+`evidence-led-patch`. It validates the fixed phase order, dependencies,
+read-only tool policy, detached mutation worktree, human gate, and verification.
+The broader capability checks below remain future work and should be added only
+when another concrete recipe needs them.
+
 The run architect should not be trusted to execute directly.
 
 Karl needs a compiler that turns proposed architecture JSON into validated
@@ -198,6 +210,11 @@ Compiler checks should include:
 This is the important Kingdom lesson: the model proposes; the runtime enforces.
 
 ### 6. Introduce Process Recipes
+
+Implementation note (2026-07-11): `evidence-led-patch` is implemented end to
+end as the sole executable recipe. It uses `magic --worktree --require-clean`,
+retains the workspace on every outcome, and hands integration back to the
+operator. The other candidate recipes remain ideas, not supported surfaces.
 
 Karl should have reusable run architecture recipes. These should be small,
 auditable patterns rather than giant workflow engines.
@@ -495,4 +512,3 @@ Human text output can stay friendly and compact.
 - **context gate**: a requirement that sufficient context exists before a route
   can run.
 - **receipt**: durable record of what was planned, what ran, and what happened.
-
