@@ -45,6 +45,7 @@ const SUBCOMMANDS: Record<string, string[]> = {
 const RUN_FLAGS = [
   '--model', '-m',
   '--verbose', '-v', '--stream', '--progress',
+  '--trace',
   '--json', '-j',
   '--stats',
   '--timeout',
@@ -223,7 +224,8 @@ _karl() {
     local run_flags=(
         '--model[Model alias or exact model id]:model:->models'
         '-m[Model alias]:model:->models'
-        '--verbose[Stream thoughts and tool calls]'
+        '--verbose[Stream bounded tool progress]'
+        '--trace[Show bounded trace guidance]'
         '-v[Verbose output]'
         '--stream[Stream output]'
         '--progress[Show progress]'
@@ -522,7 +524,8 @@ set -l run_cmds run ask do execute exec continue cont followup follow-up chain
 
 # Flags for run commands
 complete -c karl -n "__fish_seen_subcommand_from $run_cmds; or __fish_seen_subcommand_from (__karl_stacks)" -l model -s m -d "Model alias" -xa "(__karl_models)"
-complete -c karl -n "__fish_seen_subcommand_from $run_cmds; or __fish_seen_subcommand_from (__karl_stacks)" -l verbose -s v -d "Stream thoughts and tool calls"
+complete -c karl -n "__fish_seen_subcommand_from $run_cmds; or __fish_seen_subcommand_from (__karl_stacks)" -l verbose -s v -d "Stream bounded tool progress"
+complete -c karl -n "__fish_seen_subcommand_from $run_cmds; or __fish_seen_subcommand_from (__karl_stacks)" -l trace -d "Show bounded trace guidance"
 complete -c karl -n "__fish_seen_subcommand_from $run_cmds; or __fish_seen_subcommand_from (__karl_stacks)" -l stream -d "Stream output"
 complete -c karl -n "__fish_seen_subcommand_from $run_cmds; or __fish_seen_subcommand_from (__karl_stacks)" -l progress -d "Show progress"
 complete -c karl -n "__fish_seen_subcommand_from $run_cmds; or __fish_seen_subcommand_from (__karl_stacks)" -l json -s j -d "JSON output"

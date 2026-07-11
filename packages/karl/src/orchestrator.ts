@@ -38,7 +38,7 @@ export interface OrchestratorOptions {
 }
 
 export type OrchestratorEvent =
-  | { type: 'thinking'; text: string }
+  | { type: 'response_delta'; text: string }
   | { type: 'ivo_start'; task: string }
   | { type: 'ivo_end'; contextId: string; files: number; tokens: number; budget: number }
   | { type: 'agent_tool_start'; tool: string; detail: string }
@@ -884,6 +884,7 @@ function createKarlTool(
       emit({ type: 'karl_start', command, task });
 
       const args = [...karlInvocation.argsPrefix, command, task, ...flags];
+      if (!args.includes('--show-history') && !args.includes('--no-history')) args.push('--show-history');
       const childEnv: NodeJS.ProcessEnv = { ...process.env, FORCE_COLOR: '0' };
       if (context_id) {
         const contextPath = getIvoContextPath(context_id);
@@ -1253,7 +1254,7 @@ ${projectContext.text}`;
 
           case 'text_delta':
             responseText += event.delta;
-            this.emit({ type: 'thinking', text: event.delta });
+            this.emit({ type: 'response_delta', text: event.delta });
             break;
 
           case 'text_end':

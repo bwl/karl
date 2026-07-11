@@ -142,10 +142,6 @@ function printStatus(status: TaskStatus, indent: string = ''): void {
   if (status.toolsUsed.length > 0) {
     console.log(`${indent}Tools Used: ${status.toolsUsed.join(', ')}`);
   }
-  if (status.thinking) {
-    const truncated = status.thinking.length > 200 ? status.thinking.slice(-200) + '...' : status.thinking;
-    console.log(`${indent}Thinking: ${truncated}`);
-  }
   if (status.durationMs) {
     console.log(`${indent}Duration: ${formatDuration(status.durationMs)}`);
   }

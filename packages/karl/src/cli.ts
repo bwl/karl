@@ -314,7 +314,8 @@ Built-in Commands:
 ${stackVerbs}
 Flags (use with 'run'):
   --model, -m          Model alias or exact model id
-  --verbose, -v        Stream thoughts and tool calls (aliases: --stream, --progress)
+  --verbose, -v        Stream bounded tool progress (aliases: --stream, --progress)
+  --trace              Print bounded trace guidance and receipt details
   --json, -j           JSON output
   --stats              Print summary stats
   --timeout            Per-task timeout (e.g. 30s, 5000ms)
@@ -433,6 +434,10 @@ function parseArgs(argv: string[]): { options: CliOptions; tasks: (string | null
       case '-v':
       case '--stream':
       case '--progress':
+        options.verbose = true;
+        break;
+      case '--trace':
+        options.trace = true;
         options.verbose = true;
         break;
       case '--json':
@@ -792,7 +797,7 @@ async function main() {
     const agentCwd = process.cwd();
     const config = await loadConfig(agentCwd);
     const { handleAgentRepl } = await import('./commands/agent-repl.js');
-    await handleAgentRepl(config, { plain: agentOptions.plain, visuals: agentOptions.visuals });
+    await handleAgentRepl(config, { plain: agentOptions.plain, visuals: agentOptions.visuals, verbose: agentOptions.verbose, trace: agentOptions.trace });
     return;
   }
   // Handle 'claude' command - launch Claude Code with Karl-only tools
@@ -1091,7 +1096,6 @@ async function main() {
   const runStartedAt = Date.now();
   const historyId = recordHistory ? buildHistoryId(new Date(runStartedAt)) : undefined;
   const thinkingEvents: HistoryThinkingEntry[] = [];
-  let lastThinking = '';
   const diffs: ToolDiff[] = [];
   const contextInline = effectiveOptions.context;
   let contextManifestRef: { id: string; hash: string } | undefined;
@@ -1222,10 +1226,6 @@ async function main() {
     if (event.type === 'thinking') {
       spinner.setThinking(event.text);
       statusWriter.onThinking(event.text);
-      if (recordHistory && event.text !== lastThinking) {
-        thinkingEvents.push({ ts: event.time, text: event.text });
-        lastThinking = event.text;
-      }
     } else if (event.type === 'tool_start') {
       spinner.toolStart(event.tool, event.detail);
       statusWriter.onToolStart(event.tool, event.detail);
@@ -1344,8 +1344,10 @@ async function main() {
     printResults([result], {
       json: effectiveOptions.json,
       verbose: effectiveOptions.verbose,
+      trace: effectiveOptions.trace,
       stats: effectiveOptions.stats,
-      historyId
+      historyId,
+      diffs
     });
     if (result.status !== 'success') {
       process.exitCode = 1;

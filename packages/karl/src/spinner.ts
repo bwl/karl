@@ -33,9 +33,7 @@ export class Spinner {
   private verbose: boolean;
   private startTime: number = 0;
   private toolCalls: ToolCall[] = [];
-  private thinking: string[] = [];  // Lines of thinking text
   private lines = 0;
-  private lastThinkingText = '';  // Track what we've already printed in verbose mode
 
   constructor(enabled = true, verbose = false, override: string | undefined = undefined) {
     this.verbose = verbose;
@@ -51,7 +49,6 @@ export class Spinner {
     this.frameIndex = 0;
     this.startTime = Date.now();
     this.toolCalls = [];
-    this.lastThinkingText = '';
 
     if (this.verbose) {
       // In verbose mode, just print a header
@@ -74,26 +71,10 @@ export class Spinner {
     this.render();
   }
 
-  setThinking(text: string): void {
+  setThinking(_text: string): void {
     if (!this.enabled) return;
-
-    if (this.verbose) {
-      // In verbose mode, stream new thinking text as it arrives
-      if (text.length > this.lastThinkingText.length && text.startsWith(this.lastThinkingText)) {
-        const newText = text.slice(this.lastThinkingText.length);
-        process.stderr.write(`${pc.dim(newText)}`);
-      } else if (text !== this.lastThinkingText) {
-        process.stderr.write(`${pc.dim(text)}`);
-      }
-      this.lastThinkingText = text;
-      return;
-    }
-
-    // Single line last thinking
-    const maxWidth = getTerminalWidth() - 20;
-    const lines = text.split('\n').slice(-1);
-    this.thinking = lines.map(l => truncate(l.trim(), maxWidth));
-    this.render();
+    // Model reasoning is journal metadata, not terminal output. Tool and phase
+    // events provide the operator-facing progress surface.
   }
 
   toolStart(name: string, detail: string = ''): void {
@@ -101,7 +82,8 @@ export class Spinner {
 
     if (this.verbose) {
       // In verbose mode, print tool call on its own line
-      const detailStr = detail ? ` \x1b[2m${detail}\x1b[0m` : '';
+      const boundedDetail = detail.length > 500 ? `${detail.slice(0, 497)}...` : detail;
+      const detailStr = boundedDetail ? ` \x1b[2m${boundedDetail}\x1b[0m` : '';
       process.stderr.write(`\n\x1b[36m▸ ${name}\x1b[0m${detailStr}\n`);
       return;
     }
@@ -145,11 +127,6 @@ export class Spinner {
     const termWidth = getTerminalWidth();
     
     let statusLine = `${pc.cyan(spinner)} ${pc.bold(this.message || 'karl is on it...')} ${pc.dim(`(${elapsed}s)`)}`;
-
-    if (this.thinking.length > 0) {
-      const thinkText = this.thinking.slice(-1)[0] || '';
-      statusLine += ` ${pc.dim('∴')} ${pc.dim(thinkText.slice(0, termWidth / 2))}`;
-    }
 
     if (this.toolCalls.length > 0) {
       const recentTool = this.toolCalls.slice(-1)[0];
@@ -197,11 +174,6 @@ export class Spinner {
       process.stderr.write(`${finalMessage}\n`);
     }
   }
-}
-
-function truncate(s: string, max: number): string {
-  if (s.length <= max) return s;
-  return s.slice(0, max - 3) + '...';
 }
 
 function stripAnsi(str: string): string {

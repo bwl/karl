@@ -127,6 +127,7 @@ export interface KarlConfig {
 export interface CliOptions {
   model?: string;
   verbose?: boolean;
+  trace?: boolean;
   json?: boolean;
   stats?: boolean;
   timeoutMs?: number;

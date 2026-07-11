@@ -7,6 +7,7 @@ import {
   type HistoryRunSummary
 } from '../history.js';
 import { formatDuration } from '../utils.js';
+import { boundDisplayText, formatRunInspection, type InspectionMode } from '../print.js';
 
 function parseTimeArg(value: string): number | null {
   const trimmed = value.trim();
@@ -47,16 +48,10 @@ function formatSummary(summary: HistoryRunSummary): string {
   return `${summary.id}  ${when}  ${summary.status}  ${meta || '-'}  ${duration}  ${shortPrompt}`;
 }
 
-function printRun(run: HistoryRunRecord, full: boolean): void {
-  console.log(`ID:        ${run.id}`);
+function printRun(run: HistoryRunRecord, events: HistoryRunEventRecord[], full: boolean, mode: InspectionMode): void {
+  console.log(formatRunInspection(run, events, { mode, width: process.stdout.columns || 100 }));
+  console.log('');
   console.log(`Date:      ${new Date(run.createdAt).toISOString()}`);
-  console.log(`Status:    ${run.status}`);
-  if (run.terminalReason) {
-    console.log(`Reason:    ${run.terminalReason}`);
-  }
-  if (run.durationMs !== undefined) {
-    console.log(`Duration:  ${formatDuration(run.durationMs)}`);
-  }
   if (run.modelKey || run.modelId) {
     console.log(`Model:     ${run.modelKey ?? ''}${run.modelId ? ` (${run.modelId})` : ''}`);
   }
@@ -77,14 +72,14 @@ function printRun(run: HistoryRunRecord, full: boolean): void {
   }
   console.log('');
   console.log('Prompt:');
-  console.log(run.prompt);
+  console.log(boundDisplayText(run.prompt, full ? 4000 : 1000).text);
   console.log('');
   console.log('Response:');
-  console.log(run.response ?? '');
+  console.log(boundDisplayText(run.response ?? '', mode === 'summary' ? 4000 : mode === 'verbose' ? 8000 : 12_000).text);
   if (run.error) {
     console.log('');
     console.log('Error:');
-    console.log(run.error);
+    console.log(boundDisplayText(run.error, full ? 8000 : 2000).text);
   }
 
   if (run.diffs && run.diffs.length > 0) {
@@ -96,13 +91,6 @@ function printRun(run: HistoryRunRecord, full: boolean): void {
   }
 
   if (full) {
-    if (run.thinking && run.thinking.length > 0) {
-      console.log('');
-      console.log('Thinking:');
-      for (const entry of run.thinking) {
-        console.log(`[${new Date(entry.ts).toISOString()}] ${entry.text}`);
-      }
-    }
     if (run.contextFilePath) {
       console.log('');
       console.log(`Context File: ${run.contextFilePath}`);
@@ -153,6 +141,7 @@ export async function handleHistoryCommand(args: string[]): Promise<void> {
   let full = false;
   let responseOnly = false;
   let showEvents = false;
+  let mode: InspectionMode = 'summary';
   let id: string | undefined;
 
   const requireValue = (name: string, value: string | undefined): string => {
@@ -170,6 +159,16 @@ export async function handleHistoryCommand(args: string[]): Promise<void> {
     }
     if (arg === '--full') {
       full = true;
+      mode = 'trace';
+      continue;
+    }
+    if (arg === '--verbose') {
+      mode = 'verbose';
+      continue;
+    }
+    if (arg === '--trace') {
+      mode = 'trace';
+      showEvents = true;
       continue;
     }
     if (arg === '--response') {
@@ -178,6 +177,7 @@ export async function handleHistoryCommand(args: string[]): Promise<void> {
     }
     if (arg === '--events') {
       showEvents = true;
+      mode = 'trace';
       continue;
     }
     if (arg === '--limit') {
@@ -259,7 +259,7 @@ export async function handleHistoryCommand(args: string[]): Promise<void> {
       console.log(JSON.stringify({ schemaVersion: 2, run, events }, null, 2));
       return;
     }
-    printRun(run, full);
+    printRun(run, events, full, mode);
     if (showEvents) {
       console.log('');
       console.log(`Events: ${events.length}`);

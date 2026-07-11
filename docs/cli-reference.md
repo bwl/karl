@@ -87,9 +87,15 @@ the delegated `magic` run is linked to the parent architecture run.
 | Flag | Description |
 |------|-------------|
 | `--quiet`, `-q` | Results only |
-| `--verbose`, `-v` | Full traces |
+| `--verbose`, `-v` | Bounded command and result summaries |
+| `--trace` | Bounded redacted trace guidance and receipt details |
 | `--json`, `-j` | JSON output |
 | `--stats` | Token usage and cost |
+
+Output uses progressive disclosure. Summary mode is the default; `--verbose`
+adds bounded command/result summaries; `--trace` points into the redacted event
+journal. JSON remains machine-only on stdout. Model reasoning is not rendered
+as terminal progress.
 
 ## Execution
 
@@ -172,6 +178,8 @@ karl history <run-id>
 karl history <run-id> --events
 karl history <run-id> --events --full
 karl history <run-id> --events --json
+karl history <run-id> --verbose
+karl history <run-id> --trace
 ```
 
 The JSON detail response uses `schemaVersion: 2` and contains both the
@@ -188,6 +196,12 @@ Event payloads redact recognized secret-bearing keys and environment maps and
 cap nested strings and collections. `--full` expands only the stored, already
 bounded/redacted payload. It cannot recover data discarded by redaction or
 truncation.
+
+Human-readable run detail leads with outcome, terminal reason, phase results,
+changed-file count, validation, residual risk, receipt ID, and the exact
+inspection command. Failures include the last relevant bounded tool/phase
+summary. `--events` and `--trace` show the timeline; `--full` expands only the
+already redacted, bounded journal payload.
 
 ## Context Manifests
 

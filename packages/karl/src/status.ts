@@ -15,7 +15,6 @@ export interface TaskStatus {
   completedAt?: string;
   currentTool?: string;
   currentFile?: string;
-  thinking?: string;
   toolsUsed: string[];
   toolsCompleted: number;
   durationMs?: number;
@@ -71,10 +70,8 @@ export class StatusWriter {
     this.write();
   }
 
-  onThinking(text: string): void {
-    // Truncate thinking to last meaningful chunk
-    const truncated = text.length > 500 ? '...' + text.slice(-500) : text;
-    this.status.thinking = truncated;
+  onThinking(_text: string): void {
+    // Never persist model reasoning or streamed response text in live status.
     this.status.status = 'running';
     this.status.updatedAt = new Date().toISOString();
     this.write();
@@ -105,7 +102,6 @@ export class StatusWriter {
     this.status.updatedAt = this.status.completedAt;
     this.status.durationMs = durationMs;
     this.status.currentTool = undefined;
-    this.status.thinking = undefined;
     this.write();
   }
 

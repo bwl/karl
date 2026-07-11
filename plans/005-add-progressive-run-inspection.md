@@ -6,6 +6,7 @@
 
 ## Status
 
+- **State**: DONE
 - **Priority**: P2
 - **Effort**: M
 - **Risk**: LOW
@@ -71,11 +72,11 @@ Use pure formatter fixtures plus one CLI smoke test. Cover caps, truncation sign
 
 ## Done criteria
 
-- [ ] Default output remains concise during long runs.
-- [ ] Full redacted evidence remains inspectable by run ID.
-- [ ] Pipes/JSON contain no spinner or status decoration.
-- [ ] No full-screen UI dependency is added.
-- [ ] Full gates pass; scope is clean.
+- [x] Default output remains concise during long runs.
+- [x] Full redacted evidence remains inspectable by run ID.
+- [x] Pipes/JSON contain no spinner or status decoration.
+- [x] No full-screen UI dependency is added.
+- [x] Full gates pass; scope is clean.
 
 ## STOP conditions
 

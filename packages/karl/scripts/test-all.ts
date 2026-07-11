@@ -615,6 +615,76 @@ async function testHistory() {
   });
 }
 
+async function testRunInspection() {
+  suite('Run Inspection');
+  const { boundDisplayText, formatRunInspection } = await import('../src/print.js');
+  const run = {
+    id: 'ace_fixed_receipt', createdAt: 0, completedAt: 1250, durationMs: 1250,
+    status: 'success' as const, terminalReason: 'succeeded' as const, exitCode: 0,
+    cwd: '/repo', command: 'karl route execute', prompt: 'patch it',
+    response: JSON.stringify({
+      changedFiles: ['a.ts', 'b.ts'],
+      verification: [{ command: 'test', exitCode: 0 }],
+      residualRisk: 'Human review still owns integration.',
+    }),
+  };
+  const events = [
+    { runId: run.id, sequence: 1, createdAt: 1, type: 'phase_finished', payload: { phase: 'evidence' }, success: true, truncated: false },
+    { runId: run.id, sequence: 2, createdAt: 2, type: 'phase_finished', payload: { phase: 'verify' }, success: true, truncated: false },
+  ];
+
+  await test('summary formatter is deterministic and receipt-led', () => {
+    assertEqual(formatRunInspection(run, events), [
+      'Outcome: success (succeeded) in 1.3s',
+      'Phases: evidence ok -> verify ok',
+      'Files: 2 changed',
+      'Validation: 1 passed, 0 failed',
+      'Residual risk: Human review still owns integration.',
+      'Receipt: ace_fixed_receipt',
+      'Inspect: karl history ace_fixed_receipt --events',
+    ].join('\n'));
+  });
+
+  await test('verbose failure includes bounded last-tool context', () => {
+    const failedRun = { ...run, status: 'error' as const, terminalReason: 'failed' as const, error: 'tool failed' };
+    const failedEvents = [...events, {
+      runId: run.id, sequence: 3, createdAt: 3, type: 'tool_finished', toolName: 'bash',
+      payload: { result: 'x'.repeat(1000) }, success: false, truncated: true,
+    }];
+    const output = formatRunInspection(failedRun, failedEvents, { mode: 'verbose', width: 60 });
+    assertContains(output, 'Last failure: bash:');
+    assertContains(output, 'characters omitted');
+    assert(output.length < 1400, 'Verbose inspection exceeded its display bound');
+  });
+
+  await test('terminal reasons remain literal for timeout and process loss', () => {
+    for (const terminalReason of ['timed_out', 'process_lost'] as const) {
+      const output = formatRunInspection({ ...run, status: 'error', terminalReason }, [], { width: 40 });
+      assertContains(output, `Outcome: error (${terminalReason})`);
+      assert(!output.includes('\x1b['), 'Plain formatter emitted ANSI color');
+    }
+  });
+
+  await test('large nested output is capped with an explicit omission marker', () => {
+    const bounded = boundDisplayText(`head-${'x'.repeat(10000)}-tail`, 500);
+    assert(bounded.truncated);
+    assert(bounded.text.length < 600);
+    assertContains(bounded.text, 'characters omitted');
+    assert(bounded.text.endsWith('-tail'));
+  });
+
+  await test('live status never persists streamed model text', async () => {
+    const { StatusWriter } = await import('../src/status.js');
+    const cwd = join(TEST_DIR, 'inspection-status');
+    mkdirSync(cwd, { recursive: true });
+    const writer = new StatusWriter(cwd, 'inspect', 'fixed-status');
+    writer.onThinking('private-stream-fixture');
+    const status = readFileSync(join(cwd, '.karl', 'status', 'fixed-status.json'), 'utf8');
+    assert(!status.includes('private-stream-fixture'));
+    assert(!status.includes('thinking'));
+  });
+}
+
 // ============================================================================
 // Config Tests
 // ============================================================================
@@ -986,6 +1056,12 @@ async function testCLI() {
     assertEqual(output.run.terminalReason, 'succeeded');
     assert(output.events.some(event => event.type === 'tool_started'));
     assert(!stdout.includes('cli-secret-fixture'), 'History CLI leaked redacted environment content');
+
+    const textResult = await runKarl('history cli-event-run', { HOME: home, NO_COLOR: '1' });
+    assertEqual(textResult.exitCode, 0);
+    assertContains(textResult.stdout, 'Outcome: success (succeeded)');
+    assertContains(textResult.stdout, 'Inspect: karl history cli-event-run --events');
+    assert(!textResult.stdout.includes('Thinking:'), 'History exposed stored model reasoning');
   });
 
   const recipeRoot = join(TEST_DIR, 'recipe-fixture');
@@ -1231,6 +1307,7 @@ async function main() {
     await testAgentLoop();
     await testSchemaSanitization();
     await testHistory();
+    await testRunInspection();
     await testConfig();
     await testContextManifests();
     await testRunArchitecture();

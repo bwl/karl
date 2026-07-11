@@ -12,6 +12,7 @@ import type { KarlConfig } from '../types.js';
 import pc from 'picocolors';
 import { getSpinnerFrame, highlight, detectVisuals } from '../utils/visuals.js';
 import { formatDuration, resolveHomePath } from '../utils.js';
+import { boundDisplayText } from '../print.js';
 
 const AGENT_ORIENTATION_VERSION = 1;
 const AGENT_ORIENTATION_STATE = path.join('.karl', 'agent-state.json');
@@ -145,13 +146,15 @@ async function maybeRunAgentOrientation(contextFiles: string[]): Promise<void> {
 interface AgentOptions {
   plain?: boolean;
   visuals?: string;
+  verbose?: boolean;
+  trace?: boolean;
 }
 
 export function printAgentHelp(): void {
   console.log(`Karl Agent
 
 Usage:
-  karl agent [--plain] [--visuals MODE]
+  karl agent [--plain] [--verbose|--trace] [--visuals MODE]
 
 Interactive coordinator for longer Karl sessions.
 
@@ -264,7 +267,7 @@ export async function handleAgentRepl(config: KarlConfig, options: AgentOptions 
 
   orchestrator.subscribe((event: OrchestratorEvent) => {
     switch (event.type) {
-      case 'thinking':
+      case 'response_delta':
         writeAssistantDelta(event.text);
         break;
 
@@ -372,12 +375,19 @@ export async function handleAgentRepl(config: KarlConfig, options: AgentOptions 
         // Show output with highlighting (for diffs)
         const trimmedOutput = currentBuffer.trim();
         if (trimmedOutput) {
-          const highlighted = highlight(trimmedOutput);
+          const displayCap = options.trace ? 12_000 : options.verbose ? 8_000 : 2_000;
+          const bounded = boundDisplayText(trimmedOutput, displayCap);
+          const highlighted = highlight(bounded.text);
           console.log(highlighted);
+          if (bounded.truncated) {
+            console.log(pc.dim(`Nested output capped at ${displayCap} characters.`));
+          }
         }
 
         // Status line
         console.log(`${statusIcon} ${pc.dim(currentCallInfo)} ${durStr}`);
+        const receiptId = currentBuffer.match(/History:\s*(ace_[A-Za-z0-9_]+)/)?.[1];
+        if (receiptId) console.log(pc.dim(`Inspect: karl history ${receiptId} --events`));
 
         callHistory.push({ num: callNum, info: currentCallInfo, raw: currentBuffer, durationMs: durMs });
 
