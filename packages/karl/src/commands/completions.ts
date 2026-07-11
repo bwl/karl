@@ -29,7 +29,7 @@ const SUBCOMMANDS: Record<string, string[]> = {
   models: ['list', 'add', 'fusion', 'remove', 'edit', 'default', 'sync', 'browse', 'refresh'],
   stacks: ['list', 'show', 'create', 'edit', 'set', 'remove'],
   skills: ['list', 'show', 'create', 'validate'],
-  config: ['tui', 'show', 'edit', 'set'],
+  config: ['tui', 'doctor', 'show', 'edit', 'set'],
   jobs: ['clean'],
   history: ['list', 'show', 'clear'],
   route: ['plan', 'select', 'execute', 'explain'],
@@ -225,7 +225,7 @@ _karl() {
         '--no-tools[Disable tool use]'
         '--pure[Disable tool use]'
         '--reasoning[Disable tool use]'
-        '--unrestricted[Allow writes outside working directory]'
+        '--unrestricted[Bypass workspace checks and OS process sandboxing]'
         '--context[Extra system prompt text]:context:'
         '--context-file[Path to context file]:file:_files'
         '--continue[Chain from last run]'
@@ -292,6 +292,7 @@ _karl() {
                 config)
                     local -a subcmds=(
                         'tui:Launch config TUI'
+                        'doctor:Validate effective configuration'
                         'show:Show config JSON'
                         'edit:Edit config file'
                         'set:Update config fields'
@@ -474,6 +475,7 @@ complete -c karl -n "__fish_seen_subcommand_from completions" -a "fish" -d "Fish
 
 # config subcommands
 complete -c karl -n "__fish_seen_subcommand_from config" -a "tui" -d "Launch config TUI"
+complete -c karl -n "__fish_seen_subcommand_from config" -a "doctor" -d "Validate effective configuration"
 complete -c karl -n "__fish_seen_subcommand_from config" -a "show" -d "Show config JSON"
 complete -c karl -n "__fish_seen_subcommand_from config" -a "edit" -d "Edit config file"
 complete -c karl -n "__fish_seen_subcommand_from config" -a "set" -d "Update config fields"
@@ -499,7 +501,7 @@ complete -c karl -n "__fish_seen_subcommand_from $run_cmds; or __fish_seen_subco
 complete -c karl -n "__fish_seen_subcommand_from $run_cmds; or __fish_seen_subcommand_from (__karl_stacks)" -l no-tools -d "Disable tool use"
 complete -c karl -n "__fish_seen_subcommand_from $run_cmds; or __fish_seen_subcommand_from (__karl_stacks)" -l pure -d "Disable tool use"
 complete -c karl -n "__fish_seen_subcommand_from $run_cmds; or __fish_seen_subcommand_from (__karl_stacks)" -l reasoning -d "Disable tool use"
-complete -c karl -n "__fish_seen_subcommand_from $run_cmds; or __fish_seen_subcommand_from (__karl_stacks)" -l unrestricted -d "Allow writes outside working directory"
+complete -c karl -n "__fish_seen_subcommand_from $run_cmds; or __fish_seen_subcommand_from (__karl_stacks)" -l unrestricted -d "Bypass workspace checks and OS process sandboxing"
 complete -c karl -n "__fish_seen_subcommand_from $run_cmds; or __fish_seen_subcommand_from (__karl_stacks)" -l context -d "Extra system prompt text"
 complete -c karl -n "__fish_seen_subcommand_from $run_cmds; or __fish_seen_subcommand_from (__karl_stacks)" -l context-file -d "Path to context file" -r
 complete -c karl -n "__fish_seen_subcommand_from $run_cmds; or __fish_seen_subcommand_from (__karl_stacks)" -l continue -s c -d "Chain from last run"

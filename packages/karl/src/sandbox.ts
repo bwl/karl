@@ -1,29 +1,23 @@
 /**
- * Karl Sandbox
+ * Process-level sandboxing for restricted bash execution.
  *
- * Process-level sandboxing for bash tool execution.
- * - macOS: Uses Seatbelt via /usr/bin/sandbox-exec
- * - Linux: Uses bubblewrap (bwrap) if available
- *
- * Default policy: Only cwd and /tmp are writable. Everything else is read-only.
- * This prevents the agent from modifying system files, ~/.ssh, ~/.git-credentials, etc.
+ * Restricted execution fails closed when the required OS facility is absent or
+ * unusable. Only the explicit unrestricted mode disables this layer.
  */
 
-import { spawn, spawnSync } from 'child_process';
-import { existsSync } from 'fs';
+import { spawnSync } from 'child_process';
+import { existsSync, realpathSync, readdirSync } from 'fs';
 import path from 'path';
 
-// ============================================================================
-// Types
-// ============================================================================
-
 export interface SandboxPolicy {
-  /** Paths that can be written to (cwd is always included) */
+  /** Paths that can be written to (cwd is always included by the default policy). */
   writablePaths: string[];
-  /** Allow network access (default: true) */
+  /** Allow network access (default: true). */
   network: boolean;
-  /** Paths to protect from writes even within writable roots */
+  /** Paths to protect from writes even within writable roots. */
   protectedPaths: string[];
+  /** Path prefixes to protect. Bubblewrap can enforce existing matches only. */
+  protectedPathPrefixes: string[];
 }
 
 export interface SandboxResult {
@@ -32,284 +26,235 @@ export interface SandboxResult {
   warning?: string;
 }
 
-type Platform = 'macos' | 'linux' | 'unsupported';
+export type SandboxPlatform = 'macos' | 'linux' | 'unsupported';
 
-// ============================================================================
-// Platform Detection
-// ============================================================================
-
-function detectPlatform(): Platform {
+export function detectPlatform(): SandboxPlatform {
   if (process.platform === 'darwin') return 'macos';
   if (process.platform === 'linux') return 'linux';
   return 'unsupported';
 }
 
-let _bwrapAvailable: boolean | null = null;
+let bwrapAvailability: { available: boolean; message?: string } | null = null;
+let seatbeltAvailability: { available: boolean; message?: string } | null = null;
 
-function isBwrapAvailable(): boolean {
-  if (_bwrapAvailable !== null) return _bwrapAvailable;
-  try {
-    const result = spawnSync('bwrap', ['--version'], { stdio: 'pipe' });
-    _bwrapAvailable = result.status === 0;
-  } catch {
-    _bwrapAvailable = false;
+function getSeatbeltAvailability(): { available: boolean; message?: string } {
+  if (seatbeltAvailability) return seatbeltAvailability;
+  if (!existsSync('/usr/bin/sandbox-exec')) {
+    seatbeltAvailability = { available: false, message: 'macOS sandbox-exec is unavailable.' };
+    return seatbeltAvailability;
   }
-  return _bwrapAvailable;
+
+  const probe = spawnSync('/usr/bin/sandbox-exec', ['-p', '(version 1) (allow default)', '--', '/usr/bin/true'], {
+    stdio: 'pipe',
+  });
+  if (probe.status === 0) {
+    seatbeltAvailability = { available: true };
+  } else {
+    const detail = probe.stderr?.toString().trim();
+    seatbeltAvailability = {
+      available: false,
+      message: `macOS sandbox-exec is present but unusable${detail ? `: ${detail}` : '.'}`,
+    };
+  }
+  return seatbeltAvailability;
 }
 
-// ============================================================================
-// Default Policy
-// ============================================================================
+function getBwrapAvailability(): { available: boolean; message?: string } {
+  if (bwrapAvailability) return bwrapAvailability;
 
-function canonicalize(p: string): string {
+  // A version check is insufficient: containers commonly install bwrap while
+  // denying the user namespaces it needs. Probe the minimum real sandbox.
+  const probe = spawnSync('bwrap', [
+    '--ro-bind', '/', '/',
+    '--dev', '/dev',
+    '--proc', '/proc',
+    '--unshare-user',
+    '--unshare-pid',
+    '--die-with-parent',
+    '--', '/bin/true',
+  ], { stdio: 'pipe' });
+
+  if (probe.error && (probe.error as NodeJS.ErrnoException).code === 'ENOENT') {
+    bwrapAvailability = {
+      available: false,
+      message: 'bubblewrap (bwrap) was not found. Install it (for example: apt install bubblewrap).',
+    };
+  } else if (probe.status !== 0) {
+    const detail = probe.stderr?.toString().trim();
+    bwrapAvailability = {
+      available: false,
+      message: `bubblewrap is installed but cannot create the required namespaces${detail ? `: ${detail}` : '.'}`,
+    };
+  } else {
+    bwrapAvailability = { available: true };
+  }
+
+  return bwrapAvailability;
+}
+
+function canonicalize(input: string): string {
   try {
-    return require('fs').realpathSync(p);
+    return realpathSync(input);
   } catch {
-    return path.resolve(p);
+    return path.resolve(input);
   }
 }
 
 export function createDefaultPolicy(cwd: string): SandboxPolicy {
-  const tmpdir = process.env.TMPDIR || '/tmp';
-  const canonicalCwd = canonicalize(cwd);
-
-  // Canonicalize all paths to handle symlinks (e.g., /tmp → /private/tmp on macOS)
-  const writablePaths = [
-    canonicalCwd,
-    canonicalize(tmpdir),
-    canonicalize('/tmp'),
-    canonicalize('/var/tmp'),
-  ].filter((p, i, arr) => arr.indexOf(p) === i);  // dedupe
+  const root = canonicalize(cwd);
+  const temporaryPaths = [process.env.TMPDIR || '/tmp', '/tmp', '/var/tmp'].map(canonicalize);
 
   return {
-    writablePaths,
+    writablePaths: [...new Set([root, ...temporaryPaths])],
     network: true,
     protectedPaths: [
-      // Protect sensitive directories even within cwd
-      path.join(canonicalCwd, '.git'),
-      path.join(canonicalCwd, '.karl'),
-      path.join(canonicalCwd, '.env'),
+      path.join(root, '.git'),
+      path.join(root, '.karl'),
+      path.join(root, '.env'),
     ],
+    protectedPathPrefixes: [path.join(root, '.env.')],
   };
 }
 
-// ============================================================================
-// macOS Seatbelt
-// ============================================================================
-
 const SEATBELT_BASE_POLICY = `(version 1)
 
-; Start with deny-by-default
 (deny default)
-
-; Allow process execution and forking
 (allow process-exec)
 (allow process-fork)
 (allow signal (target same-sandbox))
-
-; Allow reading user preferences
 (allow user-preference-read)
-
-; Allow process info for same sandbox
 (allow process-info* (target same-sandbox))
-
-; Allow writing to /dev/null
 (allow file-write-data
   (require-all
     (path "/dev/null")
     (vnode-type CHARACTER-DEVICE)))
-
-; Allow common sysctls
 (allow sysctl-read)
-
-; Allow IOKit for hardware info
 (allow iokit-open)
-
-; Allow mach lookups for common services
 (allow mach-lookup)
-
-; Allow pseudo-ttys for interactive commands
 (allow pseudo-tty)
 (allow file-read* file-write* file-ioctl (literal "/dev/ptmx"))
 (allow file-read* file-write* (regex #"^/dev/ttys[0-9]+"))
 (allow file-ioctl (regex #"^/dev/ttys[0-9]+"))
-
-; Allow IPC for multiprocessing
 (allow ipc-posix-sem)
 (allow ipc-posix-shm)
 `;
 
-const SEATBELT_NETWORK_POLICY = `
-; Allow network access
-(allow network*)
-(allow system-socket)
-`;
-
-function createSeatbeltPolicy(policy: SandboxPolicy): string {
-  const parts = [SEATBELT_BASE_POLICY];
-
-  // Add read access to everything
-  parts.push(`
-; Allow reading files globally
-(allow file-read*)
-`);
-
-  // Add write access to specific paths
-  if (policy.writablePaths.length > 0) {
-    const writePolicies = policy.writablePaths
-      .map(p => {
-        // Canonicalize path to handle symlinks
-        const canonical = canonicalize(p);
-        return `(subpath "${canonical}")`;
-      })
-      .join('\n    ');
-
-    parts.push(`
-; Allow writing to specified paths
-(allow file-write*
-    ${writePolicies}
-)
-`);
-  }
-
-  // Add network if enabled
-  if (policy.network) {
-    parts.push(SEATBELT_NETWORK_POLICY);
-  }
-
-  return parts.join('\n');
+function seatbeltLiteral(value: string): string {
+  return JSON.stringify(value);
 }
 
-function wrapWithSeatbelt(command: string[], policy: SandboxPolicy): string[] {
-  const seatbeltPolicy = createSeatbeltPolicy(policy);
+function seatbeltRegex(value: string): string {
+  return value.replace(/[\\^$.*+?()[\]{}|]/g, '\\$&').replace(/"/g, '\\"');
+}
+
+export function createSeatbeltPolicy(policy: SandboxPolicy): string {
+  const writable = policy.writablePaths
+    .map(entry => `(subpath ${seatbeltLiteral(canonicalize(entry))})`)
+    .join('\n    ');
+  const denied = [
+    ...policy.protectedPaths.map(entry => `(subpath ${seatbeltLiteral(canonicalize(entry))})`),
+    ...policy.protectedPathPrefixes.map(entry => `(regex #"^${seatbeltRegex(canonicalize(entry))}.*")`),
+  ].join('\n    ');
 
   return [
-    '/usr/bin/sandbox-exec',
-    '-p', seatbeltPolicy,
-    '--',
-    ...command,
-  ];
+    SEATBELT_BASE_POLICY,
+    '; Allow reading files globally\n(allow file-read*)\n',
+    writable ? `; Allow writing to specified paths\n(allow file-write*\n    ${writable}\n)\n` : '',
+    denied ? `; Protected workspace paths override writable roots\n(deny file-write*\n    ${denied}\n)\n` : '',
+    policy.network ? '; Allow network access\n(allow network*)\n(allow system-socket)\n' : '',
+  ].join('\n');
 }
 
-// ============================================================================
-// Linux Bubblewrap
-// ============================================================================
+export function wrapWithSeatbelt(command: string[], policy: SandboxPolicy): string[] {
+  return ['/usr/bin/sandbox-exec', '-p', createSeatbeltPolicy(policy), '--', ...command];
+}
 
-function wrapWithBwrap(command: string[], cwd: string, policy: SandboxPolicy): string[] {
-  const args: string[] = ['bwrap'];
+function existingPrefixMatches(prefix: string): string[] {
+  const parent = path.dirname(prefix);
+  const basename = path.basename(prefix);
+  try {
+    return readdirSync(parent)
+      .filter(name => name.startsWith(basename))
+      .map(name => path.join(parent, name));
+  } catch {
+    return [];
+  }
+}
 
-  // Bind root filesystem as read-only
-  args.push('--ro-bind', '/', '/');
+export function wrapWithBwrap(command: string[], cwd: string, policy: SandboxPolicy): string[] {
+  const args = ['bwrap', '--ro-bind', '/', '/'];
 
-  // Bind writable paths
-  for (const p of policy.writablePaths) {
-    if (existsSync(p)) {
-      args.push('--bind', p, p);
-    }
+  for (const entry of policy.writablePaths) {
+    if (existsSync(entry)) args.push('--bind', entry, entry);
   }
 
-  // Mount /dev, /proc, /sys
-  args.push('--dev', '/dev');
-  args.push('--proc', '/proc');
-
-  // Set working directory
-  args.push('--chdir', cwd);
-
-  // Unshare namespaces (but not network if enabled)
-  args.push('--unshare-user');
-  args.push('--unshare-pid');
-  args.push('--unshare-uts');
-  args.push('--unshare-cgroup');
-
-  if (!policy.network) {
-    args.push('--unshare-net');
+  // Later mounts override writable parent mounts. Bubblewrap cannot reserve a
+  // nonexistent path, so future .env.* names cannot be protected on Linux.
+  const protectedPaths = [
+    ...policy.protectedPaths,
+    ...policy.protectedPathPrefixes.flatMap(existingPrefixMatches),
+  ];
+  for (const entry of [...new Set(protectedPaths)]) {
+    if (existsSync(entry)) args.push('--ro-bind', entry, entry);
   }
 
-  // Die with parent
-  args.push('--die-with-parent');
-
-  // Add the actual command
-  args.push('--');
-  args.push(...command);
-
+  args.push('--dev', '/dev', '--proc', '/proc', '--chdir', cwd);
+  args.push('--unshare-user', '--unshare-pid', '--unshare-uts', '--unshare-cgroup');
+  if (!policy.network) args.push('--unshare-net');
+  args.push('--die-with-parent', '--', ...command);
   return args;
 }
 
-// ============================================================================
-// Public API
-// ============================================================================
-
-/**
- * Wrap a command to run inside a sandbox.
- * Returns the modified command array and whether sandboxing was applied.
- */
 export function sandboxCommand(
   command: string[],
   cwd: string,
   policy?: Partial<SandboxPolicy>
 ): SandboxResult {
-  const fullPolicy = {
-    ...createDefaultPolicy(cwd),
+  const defaults = createDefaultPolicy(cwd);
+  const fullPolicy: SandboxPolicy = {
+    ...defaults,
     ...policy,
+    // Callers may add protection but cannot remove the restricted defaults.
+    protectedPaths: [...new Set([...defaults.protectedPaths, ...(policy?.protectedPaths ?? [])])],
+    protectedPathPrefixes: [...new Set([
+      ...defaults.protectedPathPrefixes,
+      ...(policy?.protectedPathPrefixes ?? []),
+    ])],
   };
 
-  const platform = detectPlatform();
-
-  switch (platform) {
-    case 'macos':
-      return {
-        sandboxed: true,
-        command: wrapWithSeatbelt(command, fullPolicy),
-      };
-
-    case 'linux':
-      if (isBwrapAvailable()) {
-        return {
-          sandboxed: true,
-          command: wrapWithBwrap(command, cwd, fullPolicy),
-        };
+  switch (detectPlatform()) {
+    case 'macos': {
+      const availability = getSeatbeltAvailability();
+      if (availability.available) {
+        return { sandboxed: true, command: wrapWithSeatbelt(command, fullPolicy) };
       }
-      return {
-        sandboxed: false,
-        command,
-        warning: 'bubblewrap (bwrap) not found. Install it for sandboxed execution: apt install bubblewrap',
-      };
+      return { sandboxed: false, command, warning: availability.message };
+    }
+
+    case 'linux': {
+      const availability = getBwrapAvailability();
+      if (availability.available) {
+        return { sandboxed: true, command: wrapWithBwrap(command, cwd, fullPolicy) };
+      }
+      return { sandboxed: false, command, warning: availability.message };
+    }
 
     case 'unsupported':
       return {
         sandboxed: false,
         command,
-        warning: `Sandboxing not supported on ${process.platform}`,
+        warning: `Sandboxing is not supported on ${process.platform}.`,
       };
   }
 }
 
-/**
- * Check if sandboxing is available on this system.
- */
-export function isSandboxAvailable(): { available: boolean; platform: Platform; message?: string } {
+export function isSandboxAvailable(): {
+  available: boolean;
+  platform: SandboxPlatform;
+  message?: string;
+} {
   const platform = detectPlatform();
-
-  switch (platform) {
-    case 'macos':
-      // sandbox-exec is always available on macOS
-      return { available: true, platform };
-
-    case 'linux':
-      if (isBwrapAvailable()) {
-        return { available: true, platform };
-      }
-      return {
-        available: false,
-        platform,
-        message: 'Install bubblewrap: apt install bubblewrap',
-      };
-
-    default:
-      return {
-        available: false,
-        platform,
-        message: `Sandboxing not supported on ${process.platform}`,
-      };
-  }
+  if (platform === 'macos') return { ...getSeatbeltAvailability(), platform };
+  if (platform === 'linux') return { ...getBwrapAvailability(), platform };
+  return { available: false, platform, message: `Sandboxing is not supported on ${process.platform}.` };
 }

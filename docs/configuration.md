@@ -10,7 +10,43 @@
 └── hooks/           # Hook scripts
 ```
 
-Project-level `.karl.json` overrides global config.
+Project-level `.karl.json` overrides global config. Provider and model files in
+`~/.config/karl/{providers,models}/` override inline entries; stack files are
+loaded from global and then project `.karl/stacks/` directories.
+
+## Configuration Diagnostics
+
+```bash
+karl config doctor
+karl config doctor --json
+```
+
+The doctor reports effective provider/model/stack entries, their reliable source
+(file or inline JSON pointer), broken references and malformed/ignored files,
+authentication readiness, and restricted-bash sandbox readiness. Authentication
+status never includes API keys or OAuth credentials. Warnings (for example a
+missing credential or unavailable host sandbox) do not fail the command; config
+errors produce exit status 1.
+
+JSON output has a versioned, stable top-level shape:
+
+```json
+{
+  "schemaVersion": 1,
+  "ok": true,
+  "sources": {},
+  "effective": {},
+  "sandbox": {},
+  "diagnostics": [],
+  "summary": { "errors": 0, "warnings": 0 }
+}
+```
+
+Provenance is limited to layers Karl can identify reliably today. The doctor
+shows the winning source for providers, models, and stacks and reports shadowed
+entries, but does not provide field-by-field merge provenance. It validates
+stack model, parent, and skill references; deeper schema validation and remote
+provider/model connectivity probes are deferred.
 
 ## Config Schema
 

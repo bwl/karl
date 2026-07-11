@@ -5,6 +5,7 @@ import { HookRunner } from './hooks.js';
 import type { SchedulerEvent, ToolDiff } from './types.js';
 import { ensureDir, formatError, pathExists, resolveHomePath } from './utils.js';
 import { sandboxCommand, type SandboxPolicy } from './sandbox.js';
+import { createWorkspacePolicy, resolveWorkspacePath } from './workspace-policy.js';
 
 // Tool parameter interfaces
 interface BashParams {
@@ -75,20 +76,9 @@ interface ToolContext {
   task?: string;
   taskIndex?: number;
   unrestricted?: boolean;
-  sandbox?: boolean | Partial<SandboxPolicy>;  // true = default sandbox, false = no sandbox, object = custom policy
+  sandbox?: Partial<SandboxPolicy>;
   onDiff?: (diff: ToolDiff) => void;
   diffConfig?: { maxBytes?: number; maxLines?: number };
-}
-
-function assertWithinCwd(resolved: string, cwd: string, operation: string): void {
-  const normalizedResolved = path.resolve(resolved);
-  const normalizedCwd = path.resolve(cwd);
-  if (!normalizedResolved.startsWith(normalizedCwd + path.sep) && normalizedResolved !== normalizedCwd) {
-    throw new Error(
-      `${operation} outside working directory is not allowed: ${resolved}\n` +
-      `Use --unrestricted to bypass this check.`
-    );
-  }
 }
 
 function textResult<T>(text: string, details: T): AgentToolResult<T> {
@@ -254,7 +244,7 @@ function wrapExecute<T, D>(
 interface RunShellOptions {
   cwd: string;
   env?: Record<string, string>;
-  sandbox?: boolean | Partial<SandboxPolicy>;
+  sandbox?: false | Partial<SandboxPolicy>;
 }
 
 async function runShell(command: string, options: RunShellOptions) {
@@ -262,20 +252,22 @@ async function runShell(command: string, options: RunShellOptions) {
   const shell = process.env.SHELL ?? '/bin/sh';
   let shellCommand = [shell, '-lc', command];
 
-  // Apply sandbox if enabled (default: true unless explicitly disabled)
+  // sandbox=false is set only by the explicit unrestricted run mode.
   const shouldSandbox = sandbox !== false;
   let sandboxWarning: string | undefined;
 
   if (shouldSandbox) {
     const policy = typeof sandbox === 'object' ? sandbox : undefined;
     const result = sandboxCommand(shellCommand, cwd, policy);
+    if (!result.sandboxed) {
+      const reason = result.warning ?? 'The required OS sandbox is unavailable.';
+      throw new Error(
+        `Restricted bash execution refused to run: ${reason}\n` +
+        'Install/enable the platform sandbox, or explicitly use --unrestricted to bypass sandboxing.'
+      );
+    }
     shellCommand = result.command;
     sandboxWarning = result.warning;
-
-    if (!result.sandboxed && sandboxWarning) {
-      // Log warning but continue unsandboxed
-      console.error(`[sandbox] ${sandboxWarning}`);
-    }
   }
 
   const proc = Bun.spawn(shellCommand, {
@@ -434,8 +426,12 @@ const editSchema: JSONSchema = {
 };
 
 export async function createBuiltinTools(ctx: ToolContext): Promise<AgentTool[]> {
-  // Determine sandbox policy: disabled if unrestricted, otherwise use ctx.sandbox or default (true)
-  const sandboxPolicy = ctx.unrestricted ? false : (ctx.sandbox ?? true);
+  // Canonicalize once so every restricted tool applies the same workspace boundary.
+  const workspacePolicy = ctx.unrestricted ? undefined : await createWorkspacePolicy(ctx.cwd);
+  const workspaceRoot = workspacePolicy?.root ?? path.resolve(ctx.cwd);
+
+  // Only explicit unrestricted mode disables sandboxing; undefined selects defaults.
+  const sandboxPolicy = ctx.unrestricted ? false : ctx.sandbox;
 
   const bash: AgentTool<BashParams> = {
     name: 'bash',
@@ -445,7 +441,10 @@ export async function createBuiltinTools(ctx: ToolContext): Promise<AgentTool[]>
     execute: wrapExecute<BashParams, any>(
       'bash',
       async (params) => {
-        const runCwd = params.cwd ? path.resolve(ctx.cwd, params.cwd) : ctx.cwd;
+        const requestedCwd = params.cwd ?? workspaceRoot;
+        const runCwd = workspacePolicy
+          ? await resolveWorkspacePath(requestedCwd, workspacePolicy, 'Bash working directory')
+          : path.resolve(workspaceRoot, requestedCwd);
         const result = await runShell(params.command, {
           cwd: runCwd,
           env: params.env,
@@ -501,10 +500,9 @@ export async function createBuiltinTools(ctx: ToolContext): Promise<AgentTool[]>
     execute: wrapExecute<WriteParams, any>(
       'write',
       async (params) => {
-        const resolved = path.isAbsolute(params.path) ? params.path : path.join(ctx.cwd, params.path);
-        if (!ctx.unrestricted) {
-          assertWithinCwd(resolved, ctx.cwd, 'Writing');
-        }
+        const resolved = workspacePolicy
+          ? await resolveWorkspacePath(params.path, workspacePolicy, 'Writing', { protect: true })
+          : path.resolve(workspaceRoot, params.path);
         const maxBytes = ctx.diffConfig?.maxBytes ?? DEFAULT_DIFF_BYTES;
         const maxLines = ctx.diffConfig?.maxLines ?? DEFAULT_DIFF_LINES;
         let beforeSnapshot: { text: string; truncated: boolean } | undefined;
@@ -549,10 +547,9 @@ export async function createBuiltinTools(ctx: ToolContext): Promise<AgentTool[]>
     execute: wrapExecute<EditParams, any>(
       'edit',
       async (params) => {
-        const resolved = path.isAbsolute(params.path) ? params.path : path.join(ctx.cwd, params.path);
-        if (!ctx.unrestricted) {
-          assertWithinCwd(resolved, ctx.cwd, 'Editing');
-        }
+        const resolved = workspacePolicy
+          ? await resolveWorkspacePath(params.path, workspacePolicy, 'Editing', { protect: true })
+          : path.resolve(workspaceRoot, params.path);
         const maxBytes = ctx.diffConfig?.maxBytes ?? DEFAULT_DIFF_BYTES;
         const maxLines = ctx.diffConfig?.maxLines ?? DEFAULT_DIFF_LINES;
         const content = await Bun.file(resolved).text();

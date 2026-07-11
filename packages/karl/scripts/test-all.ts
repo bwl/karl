@@ -10,7 +10,7 @@
  * - CLI commands
  */
 
-import { existsSync, mkdirSync, rmSync, writeFileSync, readFileSync } from 'fs';
+import { existsSync, mkdirSync, rmSync, writeFileSync, readFileSync, symlinkSync } from 'fs';
 import { join } from 'path';
 import { tmpdir } from 'os';
 
@@ -68,6 +68,16 @@ function assertContains(str: string, substr: string, message?: string) {
   }
 }
 
+async function assertRejects(fn: () => Promise<unknown>, expected: string) {
+  try {
+    await fn();
+  } catch (error) {
+    assertContains(error instanceof Error ? error.message : String(error), expected);
+    return;
+  }
+  throw new Error(`Expected rejection containing "${expected}"`);
+}
+
 // Create temp directory for tests
 const TEST_DIR = join(tmpdir(), `karl-test-${Date.now()}`);
 mkdirSync(TEST_DIR, { recursive: true });
@@ -84,6 +94,77 @@ function cleanup() {
 // Tool Tests
 // ============================================================================
 
+async function testSandboxPolicy() {
+  suite('Sandbox Policy');
+
+  const {
+    createDefaultPolicy,
+    createSeatbeltPolicy,
+    wrapWithBwrap,
+    isSandboxAvailable,
+    sandboxCommand
+  } = await import('../src/sandbox.js');
+
+  const root = join(TEST_DIR, 'sandbox-workspace');
+  mkdirSync(join(root, '.git'), { recursive: true });
+  mkdirSync(join(root, '.karl'), { recursive: true });
+  writeFileSync(join(root, '.env'), 'secret');
+  writeFileSync(join(root, '.env.local'), 'secret');
+  const policy = createDefaultPolicy(root);
+  const canonicalRoot = policy.writablePaths[0];
+
+  await test('default sandbox policy protects workspace metadata and env prefixes', () => {
+    assert(policy.protectedPaths.includes(join(canonicalRoot, '.git')));
+    assert(policy.protectedPaths.includes(join(canonicalRoot, '.karl')));
+    assert(policy.protectedPaths.includes(join(canonicalRoot, '.env')));
+    assert(policy.protectedPathPrefixes.includes(join(canonicalRoot, '.env.')));
+  });
+
+  await test('Seatbelt profile denies protected paths after allowing workspace writes', () => {
+    const profile = createSeatbeltPolicy(policy);
+    assertContains(profile, `(subpath ${JSON.stringify(join(canonicalRoot, '.git'))})`);
+    assertContains(profile, `(subpath ${JSON.stringify(join(canonicalRoot, '.karl'))})`);
+    assertContains(profile, `(subpath ${JSON.stringify(join(canonicalRoot, '.env'))})`);
+    assertContains(profile, 'Protected workspace paths override writable roots');
+    assert(profile.lastIndexOf('(deny file-write*') > profile.lastIndexOf('(allow file-write*'));
+  });
+
+  await test('bubblewrap arguments re-bind existing protected paths read-only', () => {
+    const args = wrapWithBwrap(['/bin/true'], canonicalRoot, policy);
+    const workspaceBind = args.findIndex(
+      (value, index) => value === '--bind' && args[index + 1] === canonicalRoot
+    );
+    for (const protectedPath of ['.git', '.karl', '.env', '.env.local'].map(name => join(canonicalRoot, name))) {
+      const protectedBind = args.findIndex(
+        (value, index) => value === '--ro-bind' && args[index + 1] === protectedPath
+      );
+      assert(protectedBind > workspaceBind, `${protectedPath} should override the writable workspace mount`);
+    }
+  });
+
+  await test('available platform sandbox can execute a smoke command', async () => {
+    const availability = isSandboxAvailable();
+    if (!availability.available) return;
+    const result = sandboxCommand(['/bin/sh', '-lc', 'exit 0'], root);
+    assert(result.sandboxed);
+    const proc = Bun.spawn(result.command, { cwd: root, stdout: 'pipe', stderr: 'pipe' });
+    assertEqual(await proc.exited, 0);
+  });
+
+  await test('restricted bash fails closed if the host sandbox is unavailable', async () => {
+    const availability = isSandboxAvailable();
+    if (availability.available) return;
+    const { createBuiltinTools } = await import('../src/tools.js');
+    const { HookRunner } = await import('../src/hooks.js');
+    const tools = await createBuiltinTools({ cwd: root, hooks: new HookRunner([]) });
+    const bash = tools.find(tool => tool.name === 'bash')!;
+    await assertRejects(
+      () => bash.execute('sandbox-unavailable', { command: 'echo must-not-run' }),
+      'Restricted bash execution refused to run'
+    );
+  });
+}
+
 async function testTools() {
   suite('Tools');
 
@@ -92,11 +173,11 @@ async function testTools() {
 
   const ctx = {
     cwd: TEST_DIR,
-    hooks: new HookRunner([]),
-    unrestricted: true
+    hooks: new HookRunner([])
   };
 
   const tools = await createBuiltinTools(ctx);
+  const unrestrictedTools = await createBuiltinTools({ ...ctx, unrestricted: true });
 
   await test('creates 4 builtin tools', () => {
     assertEqual(tools.length, 4, 'Should have 4 tools');
@@ -114,14 +195,14 @@ async function testTools() {
     }
   });
 
-  await test('bash tool executes commands', async () => {
-    const bash = tools.find(t => t.name === 'bash')!;
+  await test('bash tool executes commands in explicit unrestricted mode', async () => {
+    const bash = unrestrictedTools.find(t => t.name === 'bash')!;
     const result = await bash.execute('test-1', { command: 'echo hello' });
     assertContains(result.content[0].type === 'text' ? result.content[0].text : '', 'hello');
   });
 
-  await test('bash tool captures exit codes', async () => {
-    const bash = tools.find(t => t.name === 'bash')!;
+  await test('bash tool captures exit codes in explicit unrestricted mode', async () => {
+    const bash = unrestrictedTools.find(t => t.name === 'bash')!;
     const result = await bash.execute('test-2', { command: 'exit 0' });
     assert(result.content.length > 0, 'Should return result');
   });
@@ -154,13 +235,66 @@ async function testTools() {
     const edit = tools.find(t => t.name === 'edit')!;
     const testFile = join(TEST_DIR, 'test-edit-fail.txt');
     writeFileSync(testFile, 'hello');
-    let threw = false;
+    await assertRejects(
+      () => edit.execute('test-6', { path: testFile, oldText: 'xyz', newText: 'abc' }),
+      'oldText not found'
+    );
+  });
+
+  await test('write rejects traversal outside the canonical workspace', async () => {
+    const write = tools.find(t => t.name === 'write')!;
+    await assertRejects(
+      () => write.execute('test-path-1', { path: '../escaped.txt', content: 'no' }),
+      'outside working directory'
+    );
+  });
+
+  await test('bash rejects cwd outside the canonical workspace', async () => {
+    const bash = tools.find(t => t.name === 'bash')!;
+    await assertRejects(
+      () => bash.execute('test-path-2', { command: 'pwd', cwd: '..' }),
+      'outside working directory'
+    );
+  });
+
+  await test('write and edit reject symlink escapes', async () => {
+    const outside = join(tmpdir(), `karl-outside-${Date.now()}`);
+    mkdirSync(outside, { recursive: true });
+    writeFileSync(join(outside, 'existing.txt'), 'safe');
+    symlinkSync(outside, join(TEST_DIR, 'outside-link'));
+
+    const write = tools.find(t => t.name === 'write')!;
+    const edit = tools.find(t => t.name === 'edit')!;
     try {
-      await edit.execute('test-6', { path: testFile, oldText: 'xyz', newText: 'abc' });
-    } catch {
-      threw = true;
+      await assertRejects(
+        () => write.execute('test-path-3', { path: 'outside-link/new.txt', content: 'no' }),
+        'outside working directory'
+      );
+      await assertRejects(
+        () => edit.execute('test-path-4', { path: 'outside-link/existing.txt', oldText: 'safe', newText: 'changed' }),
+        'outside working directory'
+      );
+      assertEqual(readFileSync(join(outside, 'existing.txt'), 'utf8'), 'safe');
+    } finally {
+      rmSync(outside, { recursive: true, force: true });
     }
-    assert(threw, 'Should throw on missing text');
+  });
+
+  await test('write protects Karl metadata, git metadata, and environment files', async () => {
+    const write = tools.find(t => t.name === 'write')!;
+    for (const protectedPath of ['.karl/context.md', '.git/config', '.env', '.env.local']) {
+      await assertRejects(
+        () => write.execute(`test-protected-${protectedPath}`, { path: protectedPath, content: 'no' }),
+        'protected workspace path'
+      );
+    }
+  });
+
+  await test('workspace policy fails closed when cwd cannot be canonicalized', async () => {
+    await assertRejects(
+      () => createBuiltinTools({ cwd: join(TEST_DIR, 'missing-workspace'), hooks: new HookRunner([]) }),
+      'does not exist or cannot be canonicalized'
+    );
   });
 }
 
@@ -383,6 +517,55 @@ async function testConfig() {
     const result = isConfigValid(config);
     assert(typeof result === 'boolean', 'Should return boolean');
   });
+
+  const { diagnoseConfig } = await import('../src/config-doctor.js');
+  const doctorCwd = join(TEST_DIR, 'doctor');
+  mkdirSync(join(doctorCwd, '.karl', 'stacks'), { recursive: true });
+
+  await test('doctor reports a valid project configuration with stable JSON shape', async () => {
+    writeFileSync(join(doctorCwd, '.karl.json'), JSON.stringify({
+      defaultModel: 'test',
+      providers: { local: { type: 'openai', apiKey: 'test-placeholder' } },
+      models: { test: { provider: 'local', model: 'test-model' } },
+      stacks: { default: { model: 'test' } }
+    }));
+    const report = await diagnoseConfig(doctorCwd);
+    assert(report.ok, JSON.stringify(report.diagnostics));
+    assertEqual(report.schemaVersion, 1);
+    assertEqual(report.effective.defaultModel, 'test');
+    assertEqual(report.effective.providers[0].auth.ready, true);
+    assertEqual(Object.keys(report).join(','), 'schemaVersion,ok,sources,effective,sandbox,diagnostics,summary');
+  });
+
+  await test('doctor reports malformed files and broken references', async () => {
+    writeFileSync(join(doctorCwd, '.karl', 'stacks', 'broken.json'), '{ nope');
+    writeFileSync(join(doctorCwd, '.karl.json'), JSON.stringify({
+      defaultModel: 'missing',
+      providers: { local: { type: 'openai', apiKey: 'x' } },
+      models: { broken: { provider: 'absent', model: 'id' } },
+      stacks: { child: { extends: 'absent', model: 'missing' } }
+    }));
+    const report = await diagnoseConfig(doctorCwd);
+    assert(!report.ok);
+    const codes = report.diagnostics.map(item => item.code);
+    assert(codes.includes('invalid_json'));
+    assert(codes.includes('missing_default_model'));
+    assert(codes.includes('missing_provider'));
+    assert(codes.includes('missing_parent_stack'));
+  });
+
+  await test('doctor never includes configured secrets', async () => {
+    const secret = 'super-secret-doctor-value';
+    writeFileSync(join(doctorCwd, '.karl', 'stacks', 'broken.json'), '{}');
+    writeFileSync(join(doctorCwd, '.karl.json'), JSON.stringify({
+      defaultModel: 'test',
+      providers: { local: { type: 'openai', apiKey: secret } },
+      models: { test: { provider: 'local', model: 'id' } }
+    }));
+    const serialized = JSON.stringify(await diagnoseConfig(doctorCwd));
+    assert(!serialized.includes(secret), 'Doctor output leaked an API key');
+    assert(!serialized.includes('apiKey'), 'Doctor output exposed secret-bearing config fields');
+  });
 }
 
 // ============================================================================
@@ -392,18 +575,13 @@ async function testConfig() {
 async function testCLI() {
   suite('CLI Commands');
 
-  const karl = join(import.meta.dir, '../dist/karl');
+  const karl = join(import.meta.dir, '../src/cli.ts');
 
-  if (!existsSync(karl)) {
-    console.log('  ⚠ Skipping CLI tests - dist/karl not found (run bun run build first)');
-    return;
-  }
-
-  async function runKarl(args: string): Promise<{ stdout: string; stderr: string; exitCode: number }> {
+  async function runKarl(args: string, env: Record<string, string> = {}): Promise<{ stdout: string; stderr: string; exitCode: number }> {
     const proc = Bun.spawn(['bun', karl, ...args.split(' ')], {
       stdout: 'pipe',
       stderr: 'pipe',
-      env: { ...process.env, NO_COLOR: '1' }
+      env: { ...process.env, NO_COLOR: '1', ...env }
     });
     const stdout = await new Response(proc.stdout).text();
     const stderr = await new Response(proc.stderr).text();
@@ -437,6 +615,16 @@ async function testCLI() {
   await test('stacks list works', async () => {
     const { exitCode } = await runKarl('stacks list');
     assert(exitCode === 0 || exitCode === 1, 'Should not crash');
+  });
+
+  await test('config doctor emits versioned JSON', async () => {
+    const home = join(TEST_DIR, 'doctor-cli-home');
+    mkdirSync(home, { recursive: true });
+    const { stdout, exitCode } = await runKarl('config doctor --json', { HOME: home });
+    assertEqual(exitCode, 0);
+    const report = JSON.parse(stdout) as { schemaVersion?: number; diagnostics?: unknown[] };
+    assertEqual(report.schemaVersion, 1);
+    assert(Array.isArray(report.diagnostics));
   });
 
   await test('history list works', async () => {
@@ -557,6 +745,7 @@ async function main() {
   console.log(`Started: ${new Date().toISOString()}`);
 
   try {
+    await testSandboxPolicy();
     await testTools();
     await testAgentLoop();
     await testSchemaSanitization();

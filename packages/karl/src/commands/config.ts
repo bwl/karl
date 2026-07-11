@@ -2889,6 +2889,18 @@ export async function handleConfigCommand(args: string[]): Promise<void> {
     return;
   }
 
+  if (command === 'doctor') {
+    const { diagnoseConfig, printConfigDoctorReport } = await import('../config-doctor.js');
+    const report = await diagnoseConfig(process.cwd());
+    if (rest.includes('--json')) {
+      console.log(JSON.stringify(report, null, 2));
+    } else {
+      printConfigDoctorReport(report);
+    }
+    if (!report.ok) process.exitCode = 1;
+    return;
+  }
+
   if (command === 'show') {
     const scope = rest.includes('--global')
       ? 'global'
@@ -2914,10 +2926,11 @@ export async function handleConfigCommand(args: string[]): Promise<void> {
     return;
   }
 
-  console.error('Usage: karl config [tui|show|edit|set]');
+  console.error('Usage: karl config [tui|doctor|show|edit|set]');
   console.error('');
   console.error('Commands:');
   console.error('  tui                 Launch the config TUI');
+  console.error('  doctor [--json]     Validate and explain effective configuration');
   console.error('  show [--global|--project]  Show config JSON');
   console.error('  edit [--global|--project]  Edit config in $EDITOR');
   console.error('  set [--global|--project]   Update config fields');

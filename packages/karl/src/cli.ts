@@ -317,7 +317,7 @@ Flags (use with 'run'):
   --timeout            Per-task timeout (e.g. 30s, 5000ms)
   --skill              Load a skill by name
   --no-tools           Disable tool use (aliases: --pure, --reasoning)
-  --unrestricted       Allow writes outside working directory
+  --unrestricted       Bypass workspace checks and OS process sandboxing
   --context            Extra system prompt text
   --context-file       Path to context file (use - for stdin)
   --continue, -c       Chain from last run (injects previous response as context)
@@ -355,6 +355,7 @@ Models Commands:
 
 Config Commands:
   karl config                   Launch the config TUI
+  karl config doctor [--json]   Diagnose effective configuration
   karl config show              Show merged config JSON
   karl config edit              Edit config in $EDITOR
   karl config set               Update config fields

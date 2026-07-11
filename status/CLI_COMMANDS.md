@@ -228,6 +228,20 @@ Summary:
 
 ---
 
+## karl config doctor
+
+Validates and explains the effective local configuration without printing
+credentials. `--json` emits the versioned `schemaVersion: 1` report. It checks
+config and entry JSON, provider authentication readiness, model/provider and
+stack model/parent/skill references, shadowed or ignored files, and restricted
+bash sandbox readiness. Errors return status 1; warnings return status 0.
+
+Implemented provenance is entry-level for inline config and provider/model/stack
+files. Field-level merge provenance, full schema validation, and network
+connectivity checks are intentionally deferred.
+
+---
+
 ## karl history
 
 List or show previous runs recorded in history.
