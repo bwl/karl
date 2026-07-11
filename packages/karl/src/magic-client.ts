@@ -75,7 +75,10 @@ export class CodexClient {
     this.startStderrLoop();
   }
 
-  async close(): Promise<void> {
+  async close(reason?: Error): Promise<void> {
+    const closeReason = reason ?? new Error('Codex app-server client closed.');
+    if (this.pendingRequests.size > 0) this.rejectPendingRequests(closeReason);
+    this.finishTurnWithError(closeReason.message);
     if (!this.proc) return;
     this.closing = true;
     try {
@@ -97,7 +100,7 @@ export class CodexClient {
     this.proc.stdin.write(line);
   }
 
-  private sendRequest<T>(method: string, params: unknown): Promise<T> {
+  private sendRequest<T>(method: string, params: unknown, timeoutMs = 60_000): Promise<T> {
     const id = this.nextId();
     return new Promise((resolve, reject) => {
       const timer = setTimeout(() => {
@@ -108,7 +111,7 @@ export class CodexClient {
           `Timed out waiting for Codex app-server response to ${method}. ` +
           'Run `codex doctor --summary` if this keeps happening.'
         ));
-      }, 60_000);
+      }, timeoutMs);
       this.pendingRequests.set(id, { method, resolve, reject, timer });
       try {
         this.send({ jsonrpc: '2.0', id, method, params });
@@ -173,7 +176,7 @@ export class CodexClient {
       await this.sendRequest('turn/interrupt', {
         threadId: this.threadId,
         turnId: this.turnId,
-      });
+      }, 2_000);
     } catch { /* best-effort */ }
   }
 
@@ -195,9 +198,8 @@ export class CodexClient {
     // Store turnId when the response arrives
     turnPromise.then(r => {
       this.turnId = r?.turn?.id ?? null;
-    }).catch(() => {
-      this.turnDone = true;
-      this.eventResolve?.();
+    }).catch((error) => {
+      this.finishTurnWithError(error instanceof Error ? error.message : String(error));
     });
 
     // Yield events as they arrive
@@ -251,10 +253,7 @@ export class CodexClient {
         this.rejectPendingRequests(error);
 
         // If the process dies mid-turn, signal completion.
-        if (!this.turnDone) {
-          this.pushEvent({ type: 'error', message: error.message, willRetry: false });
-          this.pushEvent({ type: 'turn_completed', status: 'failed', lastMessage: null, error: error.message });
-        }
+        this.finishTurnWithError(error.message);
       }
     }
   }
@@ -288,6 +287,14 @@ export class CodexClient {
       pending.reject(error);
     }
     this.pendingRequests.clear();
+  }
+
+  private finishTurnWithError(message: string): void {
+    if (this.turnDone) return;
+    this.pushEvent({ type: 'error', message, willRetry: false });
+    this.pushEvent({ type: 'turn_completed', status: 'failed', lastMessage: null, error: message });
+    this.turnDone = true;
+    this.eventResolve?.();
   }
 
   private buildStartupError(error: unknown): Error {

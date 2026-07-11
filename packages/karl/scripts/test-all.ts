@@ -1193,8 +1193,22 @@ for await (const chunk of Bun.stdin.stream()) {
     if (request.method === 'initialize') send({ jsonrpc: '2.0', id: request.id, result: { userAgent: 'fixture' } });
     else if (request.method === 'thread/start') send({ jsonrpc: '2.0', id: request.id, result: { thread: { id: 'thread-fixture' }, model: request.params.model } });
     else if (request.method === 'turn/start') {
+      const task = request.params.input[0].text;
+      if (task === 'reject-turn') {
+        send({ jsonrpc: '2.0', id: request.id, error: { message: 'fixture turn rejection' } });
+        continue;
+      }
       send({ jsonrpc: '2.0', id: request.id, result: { turn: { id: 'turn-fixture' } } });
+      if (task === 'timeout-turn') {
+        await Bun.sleep(150);
+        send({ jsonrpc: '2.0', method: 'turn/completed', params: { turn: { status: 'completed' } } });
+        continue;
+      }
+      send({ jsonrpc: '2.0', method: 'item/started', params: { item: { type: 'commandExecution', id: 'cmd-fixture', command: 'fixture-check', cwd: '/tmp' } } });
+      await Bun.sleep(35);
       send({ jsonrpc: '2.0', method: 'item/agentMessage/delta', params: { delta: 'codex transport fixture' } });
+      await Bun.sleep(35);
+      send({ jsonrpc: '2.0', method: 'item/completed', params: { item: { type: 'commandExecution', id: 'cmd-fixture', command: 'fixture-check', exitCode: 0, durationMs: 70 } } });
       send({ jsonrpc: '2.0', method: 'thread/tokenUsage/updated', params: { tokenUsage: { total: { inputTokens: 7, outputTokens: 3, totalTokens: 10 } } } });
       send({ jsonrpc: '2.0', method: 'turn/completed', params: { turn: { status: 'completed' } } });
     }
@@ -1222,6 +1236,44 @@ for await (const chunk of Bun.stdin.stream()) {
     const magicOutput = JSON.parse(magic.stdout) as { model?: string; reasoningEffort?: string };
     assertEqual(magicOutput.model, 'gpt-5.6-sol');
     assertEqual(magicOutput.reasoningEffort, 'max');
+
+    const progress = await runKarlArgs(
+      ['magic', '--no-history', '--cwd', magicCwd, '--luna', 'progress-turn'],
+      { HOME: home, PATH: `${bin}:${process.env.PATH ?? ''}`, KARL_MAGIC_HEARTBEAT_MS: '10' }
+    );
+    assertEqual(progress.exitCode, 0, progress.stderr);
+    assertContains(progress.stderr, 'still working');
+    assertContains(progress.stderr, 'fixture-check');
+
+    const quiet = await runKarlArgs(
+      ['magic', '--quiet', '--no-history', '--cwd', magicCwd, '--luna', 'progress-turn'],
+      { HOME: home, PATH: `${bin}:${process.env.PATH ?? ''}`, KARL_MAGIC_HEARTBEAT_MS: '10' }
+    );
+    assertEqual(quiet.exitCode, 0, quiet.stderr);
+    assert(!quiet.stderr.includes('still working'), 'Quiet mode emitted a heartbeat');
+    assert(!quiet.stderr.includes('fixture-check'), 'Quiet mode emitted tool progress');
+
+    const verbose = await runKarlArgs(
+      ['magic', '--verbose', '--no-history', '--cwd', magicCwd, '--luna', 'progress-turn'],
+      { HOME: home, PATH: `${bin}:${process.env.PATH ?? ''}` }
+    );
+    assertEqual(verbose.exitCode, 0, verbose.stderr);
+    assertContains(verbose.stderr, 'fixture-check');
+    assertContains(verbose.stderr, 'done');
+
+    const rejected = await runKarlArgs(
+      ['magic', '--json', '--no-history', '--cwd', magicCwd, 'reject-turn'],
+      { HOME: home, PATH: `${bin}:${process.env.PATH ?? ''}` }
+    );
+    assertEqual(rejected.exitCode, 1);
+    assertContains(rejected.stdout, 'fixture turn rejection');
+
+    const timedOut = await runKarlArgs(
+      ['magic', '--json', '--no-history', '--timeout', '40ms', '--cwd', magicCwd, 'timeout-turn'],
+      { HOME: home, PATH: `${bin}:${process.env.PATH ?? ''}` }
+    );
+    assertEqual(timedOut.exitCode, 1);
+    assertContains(timedOut.stdout, 'timed out after 40ms');
   });
 
   await test('models list works', async () => {

@@ -23,6 +23,7 @@ import { loadConfig } from '../config.js';
 import { buildHistoryId, createHistoryStore, type HistoryThinkingEntry } from '../history.js';
 import { StatusWriter } from '../status.js';
 import type { HistoryConfig, TokenUsage, ToolDiff } from '../types.js';
+import { formatDuration, parseDurationMs } from '../utils.js';
 
 // ── Arg parsing ─────────────────────────────────────────────────────────
 
@@ -43,6 +44,7 @@ interface CodexOptions {
   requireClean: boolean;
   worktree: boolean;
   worktreeDir?: string;
+  timeoutMs?: number;
   task: string | null;
 }
 
@@ -162,6 +164,8 @@ function parseArgs(args: string[]): CodexOptions {
         opts.schema = args[++i]; break;
       case '--effort':
         opts.effort = args[++i]; break;
+      case '--timeout':
+        opts.timeoutMs = parseDurationMs(args[++i]); break;
       default:
         if (!arg.startsWith('-')) {
           positional.push(arg);
@@ -399,6 +403,8 @@ function printReceipt(receipt: MagicReceipt): void {
 
 export async function handleMagicCommand(args: string[]): Promise<void> {
   const opts = parseArgs(args);
+  if (opts.json) opts.quiet = false;
+  if (opts.quiet || opts.json) opts.verbose = false;
 
   // Read task
   let task = opts.task;
@@ -424,6 +430,7 @@ export async function handleMagicCommand(args: string[]): Promise<void> {
     console.error('  --instructions STR  Developer instructions');
     console.error('  --schema FILE       JSON Schema for structured output');
     console.error('  --effort LEVEL      Reasoning effort (none/off/minimal/low/medium/high/xhigh/max/ultra; default max)');
+    console.error('  --timeout DURATION  Optional whole-run limit (no default; e.g. 2h)');
     console.error('  --stats             Print token usage');
     console.error('  --receipt           Print a five-line delegate receipt');
     console.error('  --require-clean     Fail if --cwd has uncommitted git changes');
@@ -516,18 +523,20 @@ export async function handleMagicCommand(args: string[]): Promise<void> {
 
   // SIGINT handler
   let interrupted = false;
-  const sigintHandler = async () => {
+  let sigintForceTimer: ReturnType<typeof setTimeout> | null = null;
+  const sigintHandler = () => {
     if (interrupted) {
       // Second SIGINT — force exit
       process.exit(130);
     }
     interrupted = true;
+    turnError = 'interrupted';
+    process.exitCode = 130;
     process.stderr.write(pc.dim('\nInterrupting...\n'));
-    await client.interrupt();
-    setTimeout(() => {
-      client.close();
-      process.exit(130);
+    sigintForceTimer = setTimeout(() => {
+      void client.close(new Error('Interrupted'));
     }, 2000);
+    void client.interrupt();
   };
   process.on('SIGINT', sigintHandler);
 
@@ -547,6 +556,36 @@ export async function handleMagicCommand(args: string[]): Promise<void> {
   const toolsUsed = new Set<string>();
   const argvSnapshot = ['magic', ...args];
   const command = `karl ${argvSnapshot.join(' ')}`;
+  const progressEnabled = !opts.quiet && !opts.json;
+  const configuredHeartbeat = Number(process.env.KARL_MAGIC_HEARTBEAT_MS);
+  const heartbeatMs = Number.isFinite(configuredHeartbeat) && configuredHeartbeat > 0
+    ? configuredHeartbeat
+    : 30_000;
+  let progressPhase = 'starting';
+  let spinnerStopped = false;
+  let verboseStderrOpen = false;
+  const progressLine = (text: string) => {
+    if (!progressEnabled) return;
+    if (opts.verbose && verboseStderrOpen) {
+      process.stderr.write('\n');
+      verboseStderrOpen = false;
+    }
+    if (opts.verbose || !process.stderr.isTTY || spinnerStopped) {
+      process.stderr.write(`${text}\n`);
+    } else {
+      spinner.log(text);
+    }
+  };
+  const heartbeat = progressEnabled ? setInterval(() => {
+    if (opts.verbose || !process.stderr.isTTY || spinnerStopped) {
+      progressLine(pc.dim(`  still working · ${progressPhase} · ${formatDuration(Date.now() - runStartedAt)}`));
+    }
+  }, heartbeatMs) : null;
+  const runTimeout = opts.timeoutMs ? setTimeout(() => {
+    const message = `Magic timed out after ${formatDuration(opts.timeoutMs!)}`;
+    turnError = message;
+    void client.close(new Error(message));
+  }, opts.timeoutMs) : null;
 
   try {
     await client.start();
@@ -578,14 +617,14 @@ export async function handleMagicCommand(args: string[]): Promise<void> {
     }
 
     // Run the turn
-    let spinnerStopped = false;
     for await (const event of client.startTurn(task)) {
       switch (event.type) {
         case 'agent_message_delta':
+          progressPhase = 'responding';
           reasoningText = '';
           agentText += event.text;
           if (!opts.quiet && !opts.json) {
-            if (!spinnerStopped) {
+            if (!opts.verbose && !spinnerStopped) {
               spinner.stop();
               spinnerStopped = true;
             }
@@ -594,12 +633,14 @@ export async function handleMagicCommand(args: string[]): Promise<void> {
           break;
 
         case 'reasoning_delta':
+          progressPhase = 'reasoning';
           statusWriter?.onThinking(event.text);
           if (event.text.trim()) {
             thinkingEvents.push({ ts: Date.now(), text: event.text });
           }
           if (opts.verbose) {
             process.stderr.write(pc.dim(event.text));
+            verboseStderrOpen = !event.text.endsWith('\n');
           } else if (!opts.quiet && !opts.json) {
             reasoningText += event.text;
             spinner.setThinking(reasoningText);
@@ -607,6 +648,7 @@ export async function handleMagicCommand(args: string[]): Promise<void> {
           break;
 
         case 'command_start':
+          progressPhase = 'running command';
           reasoningText = '';
           toolsUsed.add('bash');
           commandsByItemId.set(event.itemId, {
@@ -620,13 +662,14 @@ export async function handleMagicCommand(args: string[]): Promise<void> {
             const cmd = event.command.length > 60
               ? event.command.slice(0, 57) + '...'
               : event.command;
-            spinner.log(`  ${pc.cyan('▸')} ${pc.dim(cmd)}`);
+            progressLine(`  ${pc.cyan('▸')} ${pc.dim(cmd)}`);
           }
           break;
 
         case 'command_output_delta':
           if (opts.verbose) {
             process.stderr.write(pc.dim(event.delta));
+            verboseStderrOpen = !event.delta.endsWith('\n');
           }
           break;
 
@@ -638,17 +681,19 @@ export async function handleMagicCommand(args: string[]): Promise<void> {
             record.durationMs = event.durationMs;
           }
           statusWriter?.onToolEnd('bash', ok);
+          progressPhase = 'reasoning';
           if (!opts.quiet && !opts.json) {
             const icon = ok ? pc.green('✓') : pc.red('✗');
             const dur = event.durationMs != null
               ? ` ${pc.dim(`${(event.durationMs / 1000).toFixed(1)}s`)}`
               : '';
-            spinner.log(`  ${icon} ${pc.dim('done')}${dur}`);
+            progressLine(`  ${icon} ${pc.dim('done')}${dur}`);
           }
           break;
         }
 
         case 'file_change':
+          progressPhase = 'applying patch';
           toolsUsed.add('patch');
           if (event.filePath) {
             filesChanged.add(event.filePath);
@@ -663,22 +708,25 @@ export async function handleMagicCommand(args: string[]): Promise<void> {
               ? event.filePath.split('/').pop()
               : null;
             if (event.status === 'started') {
-              spinner.log(`  ${pc.cyan('▸')} ${pc.dim('patch')} ${pc.dim(fname ?? '')}`);
+              progressLine(`  ${pc.cyan('▸')} ${pc.dim('patch')} ${pc.dim(fname ?? '')}`);
             } else {
               const ok = event.status === 'applied';
               const icon = ok ? pc.green('✓') : pc.red('✗');
-              spinner.log(`  ${icon} ${pc.dim(fname ?? 'patch')}`);
+              progressLine(`  ${icon} ${pc.dim(fname ?? 'patch')}`);
+              progressPhase = 'reasoning';
             }
           }
           break;
 
         case 'plan_delta':
+          progressPhase = 'planning';
           statusWriter?.onThinking(event.text);
           if (event.text.trim()) {
             thinkingEvents.push({ ts: Date.now(), text: event.text });
           }
           if (opts.verbose) {
             process.stderr.write(pc.dim(event.text));
+            verboseStderrOpen = !event.text.endsWith('\n');
           } else if (!opts.quiet && !opts.json) {
             reasoningText += event.text;
             spinner.setThinking(reasoningText);
@@ -688,6 +736,7 @@ export async function handleMagicCommand(args: string[]): Promise<void> {
         case 'turn_diff':
           latestDiff = event.diff;
           if (opts.verbose && event.diff) {
+            verboseStderrOpen = false;
             process.stderr.write(`\n${pc.dim('─── diff ───')}\n${event.diff}\n`);
           }
           break;
@@ -724,6 +773,7 @@ export async function handleMagicCommand(args: string[]): Promise<void> {
 
     if (!spinnerStopped) {
       spinner.stop();
+      spinnerStopped = true;
     }
 
     const durationMs = Date.now() - runStartedAt;
@@ -795,6 +845,9 @@ export async function handleMagicCommand(args: string[]): Promise<void> {
     console.error(`${pc.red('magic error:')} ${turnError}`);
     process.exitCode = 1;
   } finally {
+    if (heartbeat) clearInterval(heartbeat);
+    if (runTimeout) clearTimeout(runTimeout);
+    if (sigintForceTimer) clearTimeout(sigintForceTimer);
     const completedAt = Date.now();
     const durationMs = completedAt - runStartedAt;
     if (!receipt) {
@@ -847,6 +900,11 @@ export async function handleMagicCommand(args: string[]): Promise<void> {
           completedAt,
           durationMs,
           status: receipt.status,
+          terminalReason: receipt.status === 'success'
+            ? 'succeeded'
+            : interrupted ? 'canceled'
+            : receipt.error?.startsWith('Magic timed out after') ? 'timed_out'
+            : 'failed',
           exitCode: receipt.status === 'success' ? 0 : 1,
           cwd: runCwd,
           command,
