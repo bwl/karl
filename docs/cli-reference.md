@@ -126,6 +126,35 @@ Backoff: 1s → 2s → 4s → 8s (max 60s)
 | `0` | All tasks succeeded |
 | `1` | At least one failed |
 
+## Run History and Events
+
+Karl starts a durable SQLite history row before model/tool execution and appends
+bounded run events as attempts, tools, diffs, retries, and completion occur.
+This allows an interrupted run to retain its last durable evidence.
+
+```bash
+karl history
+karl history <run-id>
+karl history <run-id> --events
+karl history <run-id> --events --full
+karl history <run-id> --events --json
+```
+
+The JSON detail response uses `schemaVersion: 2` and contains both the
+compatibility `run` record and ordered `events`. Runs left open by a process that
+is no longer alive are reconciled to terminal reason `process_lost`; existing
+events are preserved. Other terminal reasons include `succeeded`, `failed`,
+`timed_out`, `stalled`, and `canceled`.
+
+`.karl/status.json` is an ephemeral, overwrite-in-place progress snapshot for
+operators. The SQLite run events under `~/.config/karl/history/history.db` are
+the durable diagnostic record.
+
+Event payloads redact recognized secret-bearing keys and environment maps and
+cap nested strings and collections. `--full` expands only the stored, already
+bounded/redacted payload. It cannot recover data discarded by redaction or
+truncation.
+
 ## Power User Patterns
 
 ### Shell aliases

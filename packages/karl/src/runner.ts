@@ -34,6 +34,7 @@ export interface RunTaskParams {
   thinking?: { enabled: boolean; budgetTokens?: number };  // Extended thinking
   cacheControl?: boolean;                                   // Prompt caching
   onEvent?: (event: SchedulerEvent) => void;
+  onAgentEvent?: (event: AgentEvent) => void;
   onDiff?: (diff: ToolDiff) => void;
   diffConfig?: { maxBytes?: number; maxLines?: number };
 }
@@ -185,6 +186,7 @@ export async function runTask(params: RunTaskParams): Promise<TaskResult> {
 
         // Handle events
         const agentEvent = event as AgentEvent;
+        params.onAgentEvent?.(agentEvent);
 
         switch (agentEvent.type) {
           case 'text_delta':

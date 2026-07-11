@@ -160,6 +160,7 @@ export interface ToolDiff {
   after?: string;
   diff?: string;
   truncated?: boolean;
+  journalSequence?: number;
 }
 
 export type SchedulerEvent =

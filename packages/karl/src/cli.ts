@@ -15,7 +15,8 @@ import { loadStack, StackManager } from './stacks.js';
 import { SkillManager } from './skills.js';
 import { createInterface } from 'readline';
 import { TaskRunError } from './errors.js';
-import { buildHistoryId, createHistoryStore, type HistoryThinkingEntry } from './history.js';
+import type { AgentEvent } from './agent-loop.js';
+import { buildHistoryId, createHistoryStore, type HistoryRunEventInput, type HistoryThinkingEntry } from './history.js';
 
 /**
  * Built-in commands that are handled specially.
@@ -945,7 +946,7 @@ async function main() {
 
   const needsHistoryStore = !effectiveOptions.noHistory || !!effectiveOptions.parent;
   const historyStore = needsHistoryStore ? createHistoryStore(config.history, cwd) : null;
-  const recordHistory = !!historyStore && !effectiveOptions.noHistory;
+  let recordHistory = !!historyStore && !effectiveOptions.noHistory;
   let parentId: string | undefined;
   let parentContext: string | undefined;
   if (effectiveOptions.parent) {
@@ -1088,7 +1089,6 @@ async function main() {
   const diffConfig = recordHistory
     ? { maxBytes: config.history?.maxDiffBytes, maxLines: config.history?.maxDiffLines }
     : undefined;
-  const onDiff = recordHistory ? (diff: ToolDiff) => diffs.push(diff) : undefined;
   const argvSnapshot = process.argv.slice(2);
   const command = argvSnapshot.length > 0 ? `karl ${argvSnapshot.join(' ')}` : 'karl';
   const configSnapshot = {
@@ -1111,6 +1111,84 @@ async function main() {
     retry: config.retry
   };
 
+  let historyWarningShown = false;
+  const warnHistoryOnce = (error: unknown) => {
+    if (historyWarningShown) return;
+    historyWarningShown = true;
+    console.error(`History journal warning: ${formatError(error)}`);
+  };
+  const appendHistoryEvent = (event: HistoryRunEventInput): number | undefined => {
+    if (!recordHistory || !historyStore || !historyId) return undefined;
+    try {
+      return historyStore.appendRunEvent(historyId, event);
+    } catch (error) {
+      warnHistoryOnce(error);
+      return undefined;
+    }
+  };
+
+  if (recordHistory && historyStore && historyId) {
+    try {
+      historyStore.startRun({
+        id: historyId,
+        createdAt: runStartedAt,
+        cwd,
+        command,
+        argv: argvSnapshot,
+        stack: options.stack,
+        modelKey: resolvedModel.modelKey,
+        modelId: resolvedModel.model,
+        providerKey: resolvedModel.providerKey,
+        providerType: resolvedModel.providerConfig?.type,
+        skill: effectiveOptions.skill,
+        prompt: finalTask,
+        contextFilePath,
+        contextFileRaw,
+        contextInline,
+        systemPrompt,
+        configSnapshot,
+        parentId,
+        tags: effectiveOptions.tags
+      });
+    } catch (error) {
+      warnHistoryOnce(error);
+      recordHistory = false;
+    }
+  }
+
+  let activeAttempt = 0;
+  const onDiff = recordHistory ? (diff: ToolDiff) => {
+    const sequence = appendHistoryEvent({
+      type: 'diff_recorded',
+      attempt: activeAttempt,
+      createdAt: diff.ts,
+      toolName: diff.tool,
+      payload: diff
+    });
+    if (sequence !== undefined) diff.journalSequence = sequence;
+    diffs.push(diff);
+  } : undefined;
+  const onAgentEvent = recordHistory ? (event: AgentEvent) => {
+    if (event.type === 'tool_execution_start') {
+      appendHistoryEvent({
+        type: 'tool_started',
+        attempt: activeAttempt,
+        toolCallId: event.toolCallId,
+        toolName: event.toolName,
+        payload: { args: event.args }
+      });
+    } else if (event.type === 'tool_execution_end') {
+      appendHistoryEvent({
+        type: 'tool_finished',
+        attempt: activeAttempt,
+        toolCallId: event.toolCallId,
+        toolName: event.toolName,
+        success: !event.isError,
+        payload: { result: event.result }
+      });
+    }
+  } : undefined;
+
   const state = initState([finalTask]);
   const visualsOverride = effectiveOptions.plain ? 'plain' : effectiveOptions.visuals || undefined;
   const useVerbose = effectiveOptions.verbose && !effectiveOptions.json;
@@ -1131,6 +1209,14 @@ async function main() {
     } else if (event.type === 'tool_end') {
       spinner.toolEnd(event.tool, event.success);
       statusWriter.onToolEnd(event.tool, event.success);
+    } else if (event.type === 'task_retry') {
+      appendHistoryEvent({
+        type: 'retry_scheduled',
+        attempt: event.attempt,
+        createdAt: event.time,
+        success: false,
+        payload: { delayMs: event.delayMs, error: event.error }
+      });
     }
   };
 
@@ -1139,8 +1225,10 @@ async function main() {
     spinner.start('');
     result = await runTaskWithRetry(
       finalTask,
-      (attempt) =>
-        runTask({
+      (attempt) => {
+        activeAttempt = attempt;
+        appendHistoryEvent({ type: 'attempt_started', attempt });
+        return runTask({
           task: finalTask,
           index: 0,
           attempt,
@@ -1164,12 +1252,34 @@ async function main() {
           thinking: effectiveOptions.thinking,
           cacheControl: effectiveOptions.cacheControl,
           onEvent,
+          onAgentEvent,
           onDiff,
           diffConfig
-        }),
+        });
+      },
       config.retry,
       onEvent
     );
+  } catch (error) {
+    const completedAt = Date.now();
+    if (recordHistory && historyStore && historyId) {
+      try {
+        historyStore.finishRun(historyId, {
+          completedAt,
+          durationMs: completedAt - runStartedAt,
+          status: 'error',
+          terminalReason: formatError(error).toLowerCase().includes('timed out') ? 'timed_out' : 'failed',
+          exitCode: 1,
+          error: formatError(error),
+          thinking: thinkingEvents,
+          diffs
+        });
+      } catch (historyError) {
+        warnHistoryOnce(historyError);
+      }
+    }
+    statusWriter.onError(formatError(error), completedAt - runStartedAt);
+    throw error;
   } finally {
     spinner.stop();
   }
@@ -1182,45 +1292,23 @@ async function main() {
       statusWriter.onError(result.error ?? 'Unknown error', result.durationMs);
     }
 
-    printResults([result], {
-      json: effectiveOptions.json,
-      verbose: effectiveOptions.verbose,
-      stats: effectiveOptions.stats,
-      historyId
-    });
     if (recordHistory && historyStore && historyId) {
       const completedAt = Date.now();
       try {
-        historyStore.insertRun({
-          id: historyId,
-          createdAt: runStartedAt,
+        historyStore.finishRun(historyId, {
           completedAt,
           durationMs: result.durationMs,
           status: result.status,
+          terminalReason: result.status === 'success'
+            ? 'succeeded'
+            : (result.error ?? '').toLowerCase().includes('timed out') ? 'timed_out' : 'failed',
           exitCode: result.status === 'success' ? 0 : 1,
-          cwd,
-          command,
-          argv: argvSnapshot,
-          stack: options.stack,
-          modelKey: resolvedModel.modelKey,
-          modelId: resolvedModel.model,
-          providerKey: resolvedModel.providerKey,
-          providerType: resolvedModel.providerConfig?.type,
-          skill: effectiveOptions.skill,
-          prompt: finalTask,
           response: result.result,
           error: result.error,
           thinking: thinkingEvents,
-          contextFilePath,
-          contextFileRaw,
-          contextInline,
-          systemPrompt,
-          configSnapshot,
           toolsUsed: result.toolsUsed,
           tokens: result.tokens,
-          diffs,
-          parentId,
-          tags: effectiveOptions.tags
+          diffs
         });
         const showHistoryId = effectiveOptions.showHistoryId ?? config.history?.showId ?? false;
         if (showHistoryId) {
@@ -1230,6 +1318,12 @@ async function main() {
         console.error(`History error: ${formatError(error)}`);
       }
     }
+    printResults([result], {
+      json: effectiveOptions.json,
+      verbose: effectiveOptions.verbose,
+      stats: effectiveOptions.stats,
+      historyId
+    });
     if (result.status !== 'success') {
       process.exitCode = 1;
     }

@@ -1,5 +1,11 @@
 import { loadConfig } from '../config.js';
-import { createHistoryStore, type HistoryListOptions, type HistoryRunRecord, type HistoryRunSummary } from '../history.js';
+import {
+  createHistoryStore,
+  type HistoryListOptions,
+  type HistoryRunEventRecord,
+  type HistoryRunRecord,
+  type HistoryRunSummary
+} from '../history.js';
 import { formatDuration } from '../utils.js';
 
 function parseTimeArg(value: string): number | null {
@@ -45,6 +51,9 @@ function printRun(run: HistoryRunRecord, full: boolean): void {
   console.log(`ID:        ${run.id}`);
   console.log(`Date:      ${new Date(run.createdAt).toISOString()}`);
   console.log(`Status:    ${run.status}`);
+  if (run.terminalReason) {
+    console.log(`Reason:    ${run.terminalReason}`);
+  }
   if (run.durationMs !== undefined) {
     console.log(`Duration:  ${formatDuration(run.durationMs)}`);
   }
@@ -116,6 +125,19 @@ function printRun(run: HistoryRunRecord, full: boolean): void {
   }
 }
 
+function formatEvent(event: HistoryRunEventRecord, full: boolean): string {
+  const when = new Date(event.createdAt).toISOString();
+  const identity = [event.toolName, event.attempt === undefined ? null : `attempt=${event.attempt}`].filter(Boolean).join(' ');
+  const outcome = event.success === undefined ? '' : event.success ? ' ok' : ' error';
+  let detail = '';
+  if (event.payload !== undefined) {
+    const serialized = JSON.stringify(event.payload);
+    const bounded = full || serialized.length <= 160 ? serialized : serialized.slice(0, 157) + '...';
+    detail = ` ${bounded}`;
+  }
+  return `${event.sequence}. ${when} ${event.type}${identity ? ` ${identity}` : ''}${outcome}${event.truncated ? ' [truncated]' : ''}${detail}`;
+}
+
 export async function handleHistoryCommand(args: string[]): Promise<void> {
   const cwd = process.cwd();
   const config = await loadConfig(cwd);
@@ -130,6 +152,7 @@ export async function handleHistoryCommand(args: string[]): Promise<void> {
   let json = false;
   let full = false;
   let responseOnly = false;
+  let showEvents = false;
   let id: string | undefined;
 
   const requireValue = (name: string, value: string | undefined): string => {
@@ -151,6 +174,10 @@ export async function handleHistoryCommand(args: string[]): Promise<void> {
     }
     if (arg === '--response') {
       responseOnly = true;
+      continue;
+    }
+    if (arg === '--events') {
+      showEvents = true;
       continue;
     }
     if (arg === '--limit') {
@@ -187,7 +214,7 @@ export async function handleHistoryCommand(args: string[]): Promise<void> {
     }
     if (arg === '--status') {
       const status = requireValue(arg, args[++i]);
-      if (status !== 'success' && status !== 'error') {
+      if (status !== 'running' && status !== 'success' && status !== 'error') {
         throw new Error(`Invalid status: ${status}`);
       }
       options.status = status;
@@ -227,11 +254,19 @@ export async function handleHistoryCommand(args: string[]): Promise<void> {
       console.log(run.response ?? '');
       return;
     }
+    const events = store.getRunEvents(run.id);
     if (json) {
-      console.log(JSON.stringify(run, null, 2));
+      console.log(JSON.stringify({ schemaVersion: 2, run, events }, null, 2));
       return;
     }
     printRun(run, full);
+    if (showEvents) {
+      console.log('');
+      console.log(`Events: ${events.length}`);
+      for (const event of events) {
+        console.log(formatEvent(event, full));
+      }
+    }
     return;
   }
 

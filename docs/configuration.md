@@ -151,6 +151,39 @@ karl run --context-file system-prompt.txt "analyze the architecture"
 
 **No session state.** Each invocation is fresh. For multi-turn work, use a full coding agent and delegate to Karl for side tasks.
 
+## History, Retention, and Privacy
+
+History is enabled by default and stored at
+`~/.config/karl/history/history.db`. Set `history.enabled` to `false` or pass
+`--no-history` for a run that must not be retained.
+
+```json
+{
+  "history": {
+    "enabled": true,
+    "path": "~/.config/karl/history/history.db",
+    "maxDiffBytes": 20000,
+    "maxDiffLines": 400,
+    "showId": false
+  }
+}
+```
+
+The compatibility run record may contain prompts, responses, configured context,
+thinking, and bounded diffs. Version 2 run events add an incremental diagnostic
+timeline. Event payloads redact recognized API-key, authorization, token,
+password, secret, cookie, and environment fields and truncate large values.
+
+Redaction is defensive, not perfect data-loss prevention. Prompts, source diffs,
+tool output, and shell commands can contain arbitrary sensitive text that no key
+name or pattern identifies. Never put secrets inline in prompts or commands;
+prefer environment indirection, and use `--no-history` for sensitive runs.
+
+Karl does not currently prune the SQLite history database automatically. Set an
+explicit retention/backup policy appropriate to the machine. Ephemeral project
+runtime files such as `.karl/status.json` and `.karl/status/` are separate from
+the durable global history and remain untracked.
+
 ## Hooks
 
 Run custom logic at key points:

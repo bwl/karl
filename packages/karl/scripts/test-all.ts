@@ -13,6 +13,7 @@
 import { existsSync, mkdirSync, rmSync, writeFileSync, readFileSync, symlinkSync } from 'fs';
 import { join } from 'path';
 import { tmpdir } from 'os';
+import { Database } from 'bun:sqlite';
 
 // ============================================================================
 // Test Utilities
@@ -412,11 +413,15 @@ async function testSchemaSanitization() {
 async function testHistory() {
   suite('History');
 
-  const { HistoryStore, buildHistoryId } = await import('../src/history.js');
+  const { HistoryStore, buildHistoryId, createHistoryStore, serializeJournalPayload } = await import('../src/history.js');
 
   const historyDb = join(TEST_DIR, 'history', 'history.db');
 
   const history = new HistoryStore(historyDb);
+
+  await test('respects disabled history configuration', () => {
+    assertEqual(createHistoryStore({ enabled: false }, TEST_DIR), null);
+  });
 
   await test('inserts and lists runs', () => {
     const id = buildHistoryId();
@@ -485,6 +490,128 @@ async function testHistory() {
 
     const taggedRuns = history.listRuns({ tag: ['test-tag'] });
     assert(taggedRuns.some(r => r.id === id), 'Should find tagged run');
+  });
+
+  await test('migrates a version 1 history database without data loss', () => {
+    const legacyPath = join(TEST_DIR, 'history-v1', 'history.db');
+    mkdirSync(join(TEST_DIR, 'history-v1'), { recursive: true });
+    const legacy = new Database(legacyPath);
+    legacy.exec(`
+      PRAGMA user_version = 1;
+      CREATE TABLE runs (
+        id TEXT PRIMARY KEY, created_at INTEGER NOT NULL, completed_at INTEGER,
+        duration_ms INTEGER, status TEXT NOT NULL, exit_code INTEGER,
+        cwd TEXT NOT NULL, command TEXT NOT NULL, argv TEXT, stack TEXT,
+        model_key TEXT, model_id TEXT, provider_key TEXT, provider_type TEXT,
+        skill TEXT, prompt TEXT NOT NULL, response TEXT, error TEXT, thinking TEXT,
+        context_file_path TEXT, context_file_raw TEXT, context_inline TEXT,
+        system_prompt TEXT, config_snapshot TEXT, tools_used TEXT, tokens TEXT,
+        diffs TEXT, parent_id TEXT
+      );
+      INSERT INTO runs (id, created_at, status, cwd, command, prompt)
+      VALUES ('legacy-run', 1, 'success', '/tmp', 'karl run', 'legacy prompt');
+    `);
+    legacy.close();
+
+    const migrated = new HistoryStore(legacyPath);
+    assertEqual(migrated.getRunById('legacy-run')?.prompt, 'legacy prompt');
+    const versionDb = new Database(legacyPath, { readonly: true });
+    assertEqual(Number((versionDb.query('PRAGMA user_version').get() as { user_version: number }).user_version), 2);
+    versionDb.close();
+    migrated.close();
+  });
+
+  await test('appends ordered run events and finishes the compatibility row', () => {
+    const id = buildHistoryId();
+    history.startRun({
+      id,
+      createdAt: Date.now(),
+      cwd: TEST_DIR,
+      command: 'karl run journal',
+      prompt: 'journal test'
+    });
+    history.appendRunEvent(id, {
+      type: 'tool_started',
+      attempt: 0,
+      toolCallId: 'tool-1',
+      toolName: 'bash',
+      payload: { args: { command: 'git status' } }
+    });
+    history.appendRunEvent(id, {
+      type: 'tool_finished',
+      attempt: 0,
+      toolCallId: 'tool-1',
+      toolName: 'bash',
+      success: true,
+      payload: { result: 'clean' }
+    });
+    history.finishRun(id, {
+      completedAt: Date.now(),
+      durationMs: 10,
+      status: 'success',
+      terminalReason: 'succeeded',
+      exitCode: 0,
+      toolsUsed: ['bash']
+    });
+
+    const events = history.getRunEvents(id);
+    assertEqual(events.map(event => event.type).join(','), 'run_started,tool_started,tool_finished,run_finished');
+    assert(events.every((event, index) => event.sequence === index + 1));
+    assertEqual(history.getRunById(id)?.terminalReason, 'succeeded');
+    assertEqual(history.getRunById(id)?.exitCode, 0);
+  });
+
+  await test('redacts secrets and truncates journal payloads', () => {
+    const secret = 'journal-secret-fixture';
+    const serialized = serializeJournalPayload({
+      apiKey: secret,
+      nested: { authorization: `Bearer ${secret}` },
+      args: { command: `curl -H "Authorization: Bearer ${secret}"`, env: { TOKEN: secret } },
+      output: 'x'.repeat(200)
+    }, { maxStringBytes: 32 });
+    const text = JSON.stringify(serialized.payload);
+    assert(!text.includes(secret), 'Journal payload leaked a secret fixture');
+    assertContains(text, '[REDACTED]');
+    assertContains(text, '[REDACTED ENV]');
+    assert(serialized.truncated, 'Long journal output should be marked truncated');
+  });
+
+  await test('reconciles a dead owner as process_lost without dropping events', () => {
+    const interruptedPath = join(TEST_DIR, 'history-interrupted', 'history.db');
+    const interrupted = new HistoryStore(interruptedPath);
+    interrupted.startRun({
+      id: 'interrupted-run',
+      createdAt: Date.now() - 100,
+      cwd: TEST_DIR,
+      command: 'karl run interrupted',
+      prompt: 'interrupted',
+      ownerPid: 99999999
+    });
+    interrupted.appendRunEvent('interrupted-run', { type: 'tool_started', toolName: 'read', payload: { path: 'README.md' } });
+    interrupted.close();
+
+    const reopened = new HistoryStore(interruptedPath);
+    const run = reopened.getRunById('interrupted-run');
+    assertEqual(run?.status, 'error');
+    assertEqual(run?.terminalReason, 'process_lost');
+    assert(reopened.getRunEvents('interrupted-run').some(event => event.type === 'tool_started'));
+    assertEqual(reopened.getRunEvents('interrupted-run').at(-1)?.type, 'run_finished');
+    reopened.close();
+  });
+
+  await test('preserves every explicit terminal reason', () => {
+    for (const reason of ['failed', 'timed_out', 'stalled', 'canceled'] as const) {
+      const id = `${reason}-run`;
+      history.startRun({ id, createdAt: Date.now(), cwd: TEST_DIR, command: 'karl run', prompt: reason });
+      history.finishRun(id, {
+        completedAt: Date.now(),
+        durationMs: 1,
+        status: 'error',
+        terminalReason: reason,
+        exitCode: 1
+      });
+      assertEqual(history.getRunById(id)?.terminalReason, reason);
+    }
   });
 }
 
@@ -628,8 +755,45 @@ async function testCLI() {
   });
 
   await test('history list works', async () => {
-    const { exitCode } = await runKarl('history list');
+    const home = join(TEST_DIR, 'history-list-home');
+    mkdirSync(home, { recursive: true });
+    const { exitCode } = await runKarl('history list', { HOME: home });
     assert(exitCode === 0 || exitCode === 1, 'Should not crash');
+  });
+
+  await test('history events emit versioned redacted JSON', async () => {
+    const home = join(TEST_DIR, 'history-cli-home');
+    const dbPath = join(home, '.config', 'karl', 'history', 'history.db');
+    const { HistoryStore } = await import('../src/history.js');
+    const store = new HistoryStore(dbPath);
+    store.startRun({
+      id: 'cli-event-run',
+      createdAt: Date.now(),
+      cwd: TEST_DIR,
+      command: 'karl run',
+      prompt: 'inspect events'
+    });
+    store.appendRunEvent('cli-event-run', {
+      type: 'tool_started',
+      toolName: 'bash',
+      payload: { args: { command: 'git status', env: { TOKEN: 'cli-secret-fixture' } } }
+    });
+    store.finishRun('cli-event-run', {
+      completedAt: Date.now(),
+      durationMs: 1,
+      status: 'success',
+      terminalReason: 'succeeded',
+      exitCode: 0
+    });
+    store.close();
+
+    const { stdout, exitCode } = await runKarl('history cli-event-run --events --json', { HOME: home });
+    assertEqual(exitCode, 0);
+    const output = JSON.parse(stdout) as { schemaVersion: number; run: { terminalReason?: string }; events: Array<{ type: string }> };
+    assertEqual(output.schemaVersion, 2);
+    assertEqual(output.run.terminalReason, 'succeeded');
+    assert(output.events.some(event => event.type === 'tool_started'));
+    assert(!stdout.includes('cli-secret-fixture'), 'History CLI leaked redacted environment content');
   });
 }
 

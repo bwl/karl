@@ -13,7 +13,7 @@ is implemented. Until then, this index is the durable local queue.
 | Plan | Title | Priority | Effort | Depends on | Status |
 |---|---|---:|---:|---|---|
 | [001](001-establish-work-governance.md) | Establish durable product and work governance | P1 | M | — | DONE |
-| [002](002-add-crash-safe-run-journal.md) | Add a crash-safe, inspectable run journal | P1 | L | 001 | TODO |
+| [002](002-add-crash-safe-run-journal.md) | Add a crash-safe, inspectable run journal | P1 | L | 001 | DONE |
 | [003](003-execute-evidence-led-recipe.md) | Execute one validated evidence-led run recipe | P1 | L | 001, 002 | TODO |
 | [004](004-make-context-packs-inspectable.md) | Make context packs inspectable and reproducible | P2 | M | 001, 002 | TODO |
 | [005](005-add-progressive-run-inspection.md) | Add progressive-disclosure run inspection | P2 | M | 002 | TODO |
