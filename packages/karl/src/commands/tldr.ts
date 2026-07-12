@@ -21,7 +21,7 @@ export async function handleTldrCommand(_args: string[]): Promise<void> {
   // Build output
   const lines: string[] = [];
 
-  lines.push('# Karl - AI Agent CLI');
+  lines.push('# Karl - One serve. One ace. Inspect the receipt.');
   lines.push('');
   lines.push('Karl is a Unix-native AI agent. Pipe text in, get answers out. Configure');
   lines.push('models from any provider, add skills for domain expertise, and bundle');
@@ -63,6 +63,7 @@ export async function handleTldrCommand(_args: string[]): Promise<void> {
   lines.push('  karl skills list       See available skills');
   lines.push('  karl config            Config TUI and JSON views');
   lines.push('  karl info              Full system status');
+  lines.push('  karl tour              Local guided introduction');
   lines.push('  karl --help            All options');
 
   console.log(lines.join('\n'));

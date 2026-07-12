@@ -1,5 +1,16 @@
 # CLI Reference
 
+Karl's local guided introduction is available without making a model call:
+
+```bash
+karl tour
+karl tour --plain
+```
+
+The tour is the deliberately playful surface for Karl's tennis identity. Run
+progress, errors, receipts, history, and JSON output remain literal and
+operational.
+
 ```
 karl run [flags] <task> [task...]
 ```

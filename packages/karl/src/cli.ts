@@ -56,6 +56,7 @@ const BUILTIN_COMMANDS = new Set([
   'last',      // Alias for previous
   'tldr',      // Quick reference primer
   'help',      // Alias for tldr
+  'tour',      // Local guided introduction
   'agent',     // Interactive orchestrator REPL
   'claude',    // Launch Claude Code with Karl-only tools
   'debugdesign', // UI simulation for design work
@@ -231,7 +232,9 @@ async function runStackCreationWizard(name: string, originalArgs: string[]): Pro
 }
 
 async function printOverview(): Promise<void> {
-  const overview = `karl run <task>
+  const overview = `Karl — One serve. One ace. Inspect the receipt.
+
+karl run <task>
 karl <stack> <task>         (stack as verb)
 karl continue <task>        (chain from last run)
 
@@ -252,6 +255,7 @@ Commands:
   claude                    Launch Claude Code with Karl-only access
   magic                     Delegate task to magic
   route                     Plan/select a brokered run route
+  tour                      Meet Karl (local; no model call)
 
 Flags:
   --help, -h           Show full help
@@ -293,7 +297,9 @@ async function printHelp(): Promise<void> {
     // Ignore errors loading stacks for help
   }
 
-  const help = `karl run <task>
+  const help = `Karl — One serve. One ace. Inspect the receipt.
+
+karl run <task>
 karl <stack> <task>         (stack as verb)
 karl continue <task>        (chain from last run)
 
@@ -315,6 +321,7 @@ Built-in Commands:
   claude                    Launch Claude Code with Karl-only access
   magic                     Delegate task to magic
   route                     Plan/select a brokered run route
+  tour                      Meet Karl (local; no model call)
 ${stackVerbs}
 Flags (use with 'run'):
   --model, -m          Model alias or exact model id
@@ -787,6 +794,12 @@ async function main() {
   else if (firstArg === 'tldr' || firstArg === 'help') {
     const { handleTldrCommand } = await import('./commands/tldr.js');
     await handleTldrCommand(args.slice(1));
+    return;
+  }
+  // Handle the local, read-only guided tour
+  else if (firstArg === 'tour') {
+    const { handleTourCommand } = await import('./commands/tour.js');
+    await handleTourCommand(args.slice(1));
     return;
   }
   // Handle 'agent' command - interactive orchestrator REPL

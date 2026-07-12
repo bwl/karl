@@ -1145,6 +1145,29 @@ async function testCLI() {
     assertContains(stdout, 'karl');
   });
 
+  await test('help points to the whimsical local tour', async () => {
+    const { stdout, exitCode } = await runKarl('--help');
+    assertEqual(exitCode, 0);
+    assertContains(stdout, 'One serve. One ace. Inspect the receipt.');
+    assertContains(stdout, 'tour');
+  });
+
+  await test('tour is local, useful, and plain-terminal safe', async () => {
+    const home = join(TEST_DIR, 'tour-home');
+    mkdirSync(home, { recursive: true });
+    const tour = await runKarl('tour', { HOME: home });
+    assertEqual(tour.exitCode, 0, tour.stderr);
+    assertContains(tour.stdout, 'ONE SERVE. ONE ACE.');
+    assertContains(tour.stdout, 'No model call');
+    assertContains(tour.stdout, 'karl magic --luna');
+    assertContains(tour.stdout, 'karl history');
+
+    const plain = await runKarl('tour --plain', { HOME: home });
+    assertEqual(plain.exitCode, 0, plain.stderr);
+    assert(!/[^\x09\x0a\x0d\x20-\x7e]/.test(plain.stdout), 'Plain tour emitted non-ASCII output');
+    assert(!plain.stdout.includes('\u001b['), 'Plain tour emitted ANSI escapes');
+  });
+
   await test('--version shows version', async () => {
     const { stdout, exitCode } = await runKarl('--version');
     assertEqual(exitCode, 0);

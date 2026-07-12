@@ -17,6 +17,7 @@ karl run "your question or task"
 karl run "analyze auth.go for security issues"
 karl route plan --json "implement the verifier"
 karl route plan --json "read-only assess this repo; do not edit files"
+karl tour
 ```
 
 ### Pipelines
@@ -51,6 +52,7 @@ karl providers        # Manage LLM providers
 karl models           # Manage models
 karl stacks           # Manage config stacks
 karl skills           # Manage agent skills
+karl tour             # Meet Karl (local; no model call)
 ```
 
 ## Documentation
