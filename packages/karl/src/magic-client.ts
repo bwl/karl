@@ -2,7 +2,7 @@
  * Thin protocol client for `codex app-server` (JSON-RPC over JSONL/stdio).
  *
  * Spawns the app-server as a child process, handles the bidirectional
- * JSON-RPC protocol, auto-approves tool calls, and exposes a streaming
+ * JSON-RPC protocol, applies host approval policy, and exposes a streaming
  * async generator for turn events.
  */
 
@@ -34,6 +34,7 @@ export interface CodexClientOptions {
   outputSchema?: unknown;
   ephemeral?: boolean;
   sandbox?: 'read-only' | 'workspace-write' | 'danger-full-access';
+  approveCommand?: (params: unknown) => boolean;
 }
 
 // ── Client class ────────────────────────────────────────────────────────
@@ -362,17 +363,24 @@ export class CodexClient {
     }
   }
 
-  // ── Server requests → auto-approve ────────────────────────────────────
+  // ── Server requests → explicit host policy ────────────────────────────
 
-  private handleServerRequest(id: number, method: string, _params: any): void {
+  private handleServerRequest(id: number, method: string, params: any): void {
     switch (method) {
       case 'item/commandExecution/requestApproval':
+        this.sendResponse(id, { decision: this.options.approveCommand?.(params) ? 'accept' : 'decline' });
+        break;
       case 'execCommandApproval':
-        this.sendResponse(id, { decision: 'accept' });
+        this.sendResponse(id, { decision: this.options.approveCommand?.(params) ? 'approved' : 'denied' });
         break;
       case 'item/fileChange/requestApproval':
+        this.sendResponse(id, { decision: 'decline' });
+        break;
       case 'applyPatchApproval':
-        this.sendResponse(id, { decision: 'accept' });
+        this.sendResponse(id, { decision: 'denied' });
+        break;
+      case 'item/permissions/requestApproval':
+        this.sendResponse(id, { permissions: {}, scope: 'turn' });
         break;
       case 'item/tool/requestUserInput':
         this.sendResponse(id, { answers: {} });

@@ -86,5 +86,9 @@ Karl is not currently trying to become:
 - an owner of automatic commits, merges, pushes, or destructive workspace
   cleanup.
 
+Karl may perform local commits when the operator explicitly asks for them. That
+run-scoped authority is distinct from automatic integration and never implies
+push, merge, release, or cleanup authority.
+
 These are product boundaries, not permanent prohibitions. Crossing one requires
 an explicit decision record showing why the simpler Karl is insufficient.

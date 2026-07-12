@@ -12,6 +12,7 @@ import { formatError } from './utils.js';
 import { TaskRunError, TimeoutError } from './errors.js';
 import { CodexClient } from './magic-client.js';
 import { isCodexProvider } from './codex-provider.js';
+import { commitAuthorityInstructions, hasExplicitCommitIntent, isAllowedCommitCommand } from './git-authority.js';
 
 export interface RunTaskParams {
   task: string;
@@ -103,13 +104,19 @@ async function runCodexTurn(
     );
   }
 
+  const allowCommit = hasExplicitCommitIntent(params.task);
   const client = new CodexClient({
     cwd: params.cwd,
     model: params.model,
-    instructions: params.systemPrompt,
-    approvalPolicy: 'never',
+    instructions: allowCommit
+      ? params.systemPrompt + commitAuthorityInstructions(params.cwd)
+      : params.systemPrompt,
+    approvalPolicy: allowCommit ? 'on-request' : 'never',
     sandbox: params.unrestricted ? 'danger-full-access' : 'workspace-write',
     ephemeral: true,
+    approveCommand: allowCommit
+      ? approval => isAllowedCommitCommand(approval, params.cwd)
+      : undefined,
   });
   onClient(client);
   let text = '';

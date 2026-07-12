@@ -1137,6 +1137,7 @@ async function testCLI() {
   suite('CLI Commands');
 
   const karl = join(import.meta.dir, '../src/cli.ts');
+  const { hasExplicitCommitIntent, isAllowedCommitCommand } = await import('../src/git-authority.js');
 
   async function runKarl(args: string, env: Record<string, string> = {}): Promise<{ stdout: string; stderr: string; exitCode: number }> {
     const proc = Bun.spawn(['bun', karl, ...args.split(' ')], {
@@ -1161,6 +1162,18 @@ async function testCLI() {
     const exitCode = await proc.exited;
     return { stdout, stderr, exitCode };
   }
+
+  await test('commit authority requires explicit intent and permits only local add/commit', () => {
+    assert(hasExplicitCommitIntent('please commit these Karl updates in logical chunks'));
+    assert(hasExplicitCommitIntent('review the changes and create separate commits'));
+    assert(!hasExplicitCommitIntent('fix the git commit sandbox bug'));
+    assert(!hasExplicitCommitIntent('review this but do not commit anything'));
+    assert(isAllowedCommitCommand({ command: 'git add packages/karl', cwd: TEST_DIR }, TEST_DIR));
+    assert(isAllowedCommitCommand({ command: ['git', 'commit', '-m', 'Fix policy'], cwd: TEST_DIR }, TEST_DIR));
+    assert(!isAllowedCommitCommand({ command: 'git push', cwd: TEST_DIR }, TEST_DIR));
+    assert(!isAllowedCommitCommand({ command: 'git add . && git commit -m chained', cwd: TEST_DIR }, TEST_DIR));
+    assert(!isAllowedCommitCommand({ command: 'git commit -m outside', cwd: '/tmp' }, TEST_DIR));
+  });
 
   await test('--help shows usage', async () => {
     const { stdout, exitCode } = await runKarl('--help');
@@ -1228,6 +1241,7 @@ if (args[0] === '--version') { console.log('codex-cli fixture'); process.exit(0)
 if (args[0] === 'login' && args[1] === 'status') { console.log('Logged in using fixture'); process.exit(0); }
 if (args[0] !== 'app-server') process.exit(2);
 let buffer = '';
+let approvalPolicy = '';
 const send = (value: unknown) => process.stdout.write(JSON.stringify(value) + '\\n');
 for await (const chunk of Bun.stdin.stream()) {
   buffer += new TextDecoder().decode(chunk);
@@ -1237,9 +1251,20 @@ for await (const chunk of Bun.stdin.stream()) {
     if (!line.trim()) continue;
     const request = JSON.parse(line);
     if (request.method === 'initialize') send({ jsonrpc: '2.0', id: request.id, result: { userAgent: 'fixture' } });
-    else if (request.method === 'thread/start') send({ jsonrpc: '2.0', id: request.id, result: { thread: { id: 'thread-fixture' }, model: request.params.model } });
+    else if (request.method === 'thread/start') {
+      approvalPolicy = request.params.approvalPolicy;
+      send({ jsonrpc: '2.0', id: request.id, result: { thread: { id: 'thread-fixture' }, model: request.params.model } });
+    }
     else if (request.method === 'turn/start') {
       const task = request.params.input[0].text;
+      if (task === 'please commit these changes') {
+        send({ jsonrpc: '2.0', id: request.id, result: { turn: { id: 'turn-fixture' } } });
+        send({
+          jsonrpc: '2.0', id: 9001, method: 'item/commandExecution/requestApproval',
+          params: { command: 'git commit -m fixture', cwd: process.cwd() }
+        });
+        continue;
+      }
       if (task === 'reject-turn') {
         send({ jsonrpc: '2.0', id: request.id, error: { message: 'fixture turn rejection' } });
         continue;
@@ -1258,6 +1283,10 @@ for await (const chunk of Bun.stdin.stream()) {
       send({ jsonrpc: '2.0', method: 'thread/tokenUsage/updated', params: { tokenUsage: { total: { inputTokens: 7, outputTokens: 3, totalTokens: 10 } } } });
       send({ jsonrpc: '2.0', method: 'turn/completed', params: { turn: { status: 'completed' } } });
     }
+    else if (request.id === 9001) {
+      send({ jsonrpc: '2.0', method: 'item/agentMessage/delta', params: { delta: JSON.stringify({ ...request.result, approvalPolicy }) } });
+      send({ jsonrpc: '2.0', method: 'turn/completed', params: { turn: { status: 'completed' } } });
+    }
   }
 }
 `);
@@ -1271,6 +1300,16 @@ for await (const chunk of Bun.stdin.stream()) {
     assertContains(stdout, 'codex transport fixture');
     const output = JSON.parse(stdout) as { results: Array<{ tokens?: { total?: number } }> };
     assertEqual(output.results[0]?.tokens?.total, 10);
+
+    const commit = await runKarlArgs(
+      ['--json', '--no-history', '--model', 'codex-fixture', 'please commit these changes'],
+      { HOME: home, PATH: `${bin}:${process.env.PATH ?? ''}` }
+    );
+    assertEqual(commit.exitCode, 0, commit.stderr);
+    const commitOutput = JSON.parse(commit.stdout) as { results: Array<{ result: string }> };
+    const approval = JSON.parse(commitOutput.results[0].result) as { decision: string; approvalPolicy: string };
+    assertEqual(approval.decision, 'accept');
+    assertEqual(approval.approvalPolicy, 'on-request');
 
     const magicCwd = join(TEST_DIR, 'magic-profile-cwd');
     mkdirSync(magicCwd, { recursive: true });

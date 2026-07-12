@@ -51,6 +51,13 @@ Treat these paths as protected during restricted execution:
 - root `.env` and `.env.*`
 - configuration or credential files outside the workspace
 
+An explicit operator request to create local commits grants a narrow exception
+for standalone `git add` and `git commit` commands in the selected workspace.
+Karl must route those commands through its approval boundary; it must not turn
+the whole run unrestricted. The exception does not include push, reset, clean,
+checkout, restore, worktree removal, command chains, or writes outside the
+workspace.
+
 Authored `.karl` files identified by `AGENTS.md` may be changed only when the
 work item explicitly includes them. Runtime `.karl` state is never committed.
 
