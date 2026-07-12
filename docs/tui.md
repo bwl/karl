@@ -40,10 +40,14 @@ stderr and appear only when appropriate for a terminal. Non-TTY output,
 `--plain`, `NO_COLOR`, and JSON mode avoid cursor animation and ANSI-dependent
 meaning, so `|`, redirection, `less`, and log capture remain reliable.
 
-## Why a full TUI is deferred
+## Why a full run TUI is deferred
 
-A full-screen UI would add terminal-state recovery, rendering, and dependency
-risk without improving the underlying evidence. The current surface keeps the
-valuable hierarchy—summary first, details on demand—while remaining Unix-native.
-An optional future UI can consume the same journal without changing run
-semantics.
+A full-screen UI for live run output would add terminal-state recovery and
+rendering risk without improving the underlying evidence. The current run
+surface keeps the valuable hierarchy—summary first, details on demand—while
+remaining Unix-native. An optional future history viewer can consume the same
+journal without changing run semantics.
+
+This does not apply to deliberate interactive workspaces. `karl config` uses a
+full-screen OpenTUI interface because configuration is a bounded editing task,
+while `config doctor`, `show`, `edit`, and `set` remain scriptable commands.

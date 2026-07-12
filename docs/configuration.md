@@ -14,6 +14,22 @@ Project-level `.karl.json` overrides global config. Provider and model files in
 `~/.config/karl/{providers,models}/` override inline entries; stack files are
 loaded from global and then project `.karl/stacks/` directories.
 
+## Interactive Configuration
+
+```bash
+karl config
+```
+
+The interactive workspace has persistent categories for common changes,
+models, providers, stacks, runtime settings, and files. Move with arrow keys or
+`j`/`k`, press Enter to choose, and press `/` when filtering is useful. The
+action list scrolls, so filtering is optional rather than the primary way to
+find a setting. `a` adds, `d` removes, `s` sets the selected model as default,
+and `?` shows contextual shortcuts.
+
+Automation should continue to use `karl config doctor`, `show`, `edit`, and
+`set`; those commands do not depend on the interactive interface.
+
 ## Configuration Diagnostics
 
 ```bash

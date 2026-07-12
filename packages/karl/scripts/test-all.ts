@@ -721,6 +721,29 @@ async function testConfig() {
     assert(typeof result === 'boolean', 'Should return boolean');
   });
 
+  const { filterConfigActions } = await import('../src/commands/config-tui-data.js');
+  await test('config TUI filtering is optional and searches labels plus details', () => {
+    const actions = [
+      { id: 'model:luna', name: 'Luna', description: 'Codex model' },
+      { id: 'provider:openrouter', name: 'OpenRouter', description: 'Oddball models' },
+    ];
+    assertEqual(filterConfigActions(actions, '').length, 2);
+    assertEqual(filterConfigActions(actions, 'codex')[0]?.id, 'model:luna');
+    assertEqual(filterConfigActions(actions, 'OPENROUTER')[0]?.id, 'provider:openrouter');
+  });
+
+  const { applyConfigUpdates } = await import('../src/commands/config.js');
+  await test('scriptable config updates preserve unrelated fields', () => {
+    const next = applyConfigUpdates(
+      { defaultModel: 'old', custom: { keep: true }, retry: { attempts: 2, backoff: 'linear' } },
+      { defaultModel: 'new', retryAttempts: 4 },
+      new Set()
+    );
+    assertEqual(next.defaultModel, 'new');
+    assertEqual((next.custom as { keep: boolean }).keep, true);
+    assertEqual((next.retry as { attempts: number }).attempts, 4);
+  });
+
   const { diagnoseConfig } = await import('../src/config-doctor.js');
   const doctorCwd = join(TEST_DIR, 'doctor');
   mkdirSync(join(doctorCwd, '.karl', 'stacks'), { recursive: true });

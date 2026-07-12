@@ -8,13 +8,13 @@
   "scripts": {
     "test": "bun run scripts/test-all.ts",
     "test-skills": "bun run scripts/test-skills.ts",
-    "build": "bun build src/cli.ts --target bun --outfile dist/karl",
+    "build": "bun build src/cli.ts --target bun --outfile dist/karl --external @opentui/core",
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
+    "@opentui/core": "0.4.3",
     "cli-boxes": "^3.0.0",
     "cli-spinners": "^2.9.0",
-    "neo-blessed": "^0.2.0",
     "picocolors": "^1.0.0"
   },
   "devDependencies": {
