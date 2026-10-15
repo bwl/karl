@@ -134,7 +134,7 @@ function sumTokens(results: TaskResult[]): TokenUsage | undefined {
 
 function formatResultBody(result: TaskResult): string {
   if (result.status === 'error') {
-    return `Error: ${result.error ?? 'Unknown error'}`;
+    return `Error: ${result.error ?? 'Unknown error'}${result.result ? `\n\nPartial answer (incomplete):\n\n${result.result}` : ''}`;
   }
   return result.result ?? '';
 }

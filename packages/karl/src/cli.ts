@@ -325,11 +325,14 @@ Built-in Commands:
 ${stackVerbs}
 Flags (use with 'run'):
   --model, -m          Model alias or exact model id
+  --provider           Provider for an exact model id (e.g. openrouter)
+  --max-tokens         Output budget, including reasoning tokens
+  --reasoning-effort   Reasoning effort: low, medium, high (HTTP providers)
   --verbose, -v        Stream bounded tool progress (aliases: --stream, --progress)
   --trace              Print bounded trace guidance and receipt details
   --json, -j           JSON output
   --stats              Print summary stats
-  --timeout            Per-task timeout (e.g. 30s, 5000ms)
+  --timeout            Per-task timeout (e.g. 30m, 2h; 0 disables it)
   --skill              Load a skill by name
   --no-tools           Disable tool use (aliases: --pure, --reasoning)
   --unrestricted       Bypass workspace checks and OS process sandboxing
@@ -441,6 +444,26 @@ function parseArgs(argv: string[]): { options: CliOptions; tasks: (string | null
       case '-m':
         options.model = requireValue(flag, inlineValue ?? argv[++i]);
         break;
+      case '--provider':
+        options.provider = requireValue(flag, inlineValue ?? argv[++i]);
+        break;
+      case '--max-tokens': {
+        const raw = requireValue(flag, inlineValue ?? argv[++i]);
+        const value = Number(raw);
+        if (!/^\d+$/.test(raw) || !Number.isSafeInteger(value) || value <= 0) {
+          throw new Error(`Invalid output token budget: ${raw}`);
+        }
+        options.maxTokens = value;
+        break;
+      }
+      case '--reasoning-effort': {
+        const value = requireValue(flag, inlineValue ?? argv[++i]);
+        if (value !== 'low' && value !== 'medium' && value !== 'high') {
+          throw new Error(`Invalid reasoning effort: ${value}. Use low, medium, or high.`);
+        }
+        options.reasoningEffort = value;
+        break;
+      }
       case '--verbose':
       case '-v':
       case '--stream':
@@ -461,7 +484,7 @@ function parseArgs(argv: string[]): { options: CliOptions; tasks: (string | null
       case '--timeout': {
         const raw = requireValue(flag, inlineValue ?? argv[++i]);
         const parsed = raw ? parseDurationMs(raw) : null;
-        if (!parsed) {
+        if (parsed === null || !Number.isFinite(parsed) || parsed < 0 || parsed > 2_147_483_647) {
           throw new Error(`Invalid timeout: ${raw}`);
         }
         options.timeoutMs = parsed;
@@ -556,8 +579,8 @@ function parseArgs(argv: string[]): { options: CliOptions; tasks: (string | null
 function isRetryable(error: unknown): boolean {
   if (error && typeof error === 'object') {
     const anyError = error as { retryable?: boolean; status?: number; code?: number };
-    if (anyError.retryable) {
-      return true;
+    if (anyError.retryable !== undefined) {
+      return anyError.retryable;
     }
     const status = anyError.status ?? anyError.code;
     if (status && [408, 429, 500, 502, 503, 504].includes(status)) {
@@ -609,6 +632,7 @@ async function runTaskWithRetry(
       return {
         task,
         status: 'error',
+        result: errorData.partialResult,
         error: message,
         durationMs,
         toolsUsed: errorData.toolsUsed ?? [],
@@ -1003,6 +1027,16 @@ async function main() {
   }
 
   const resolvedModel = resolveModel(config, effectiveOptions);
+  const requestBody = mergeRequestBodies(resolvedModel.request, effectiveOptions.request,
+    effectiveOptions.maxTokens === undefined ? undefined : { max_tokens: effectiveOptions.maxTokens },
+    effectiveOptions.reasoningEffort ? { reasoning: {
+      ...((effectiveOptions.request?.reasoning ?? resolvedModel.request?.reasoning ?? {}) as Record<string, unknown>),
+      effort: effectiveOptions.reasoningEffort,
+    } } : undefined);
+
+  if (effectiveOptions.reasoningEffort && resolvedModel.providerConfig.type !== 'openai') {
+    throw new Error('--reasoning-effort requires an OpenAI-compatible HTTP provider such as OpenRouter.');
+  }
 
   // Resolve credentials based on provider's authType
   let apiKey: string | null | undefined;
@@ -1045,6 +1079,7 @@ async function main() {
   const rawTask = tasks[0] ?? null;
   const explicitStdinTask = tasks.length > 0 && rawTask === null;
   const needsStdinForTask = explicitStdinTask || (tasks.length === 0 && !process.stdin.isTTY);
+  const pipedContext = !process.stdin.isTTY && !needsStdinForTask && !contextFromStdin;
 
   // Can't read both context and task from stdin
   if (contextFromStdin && needsStdinForTask) {
@@ -1055,20 +1090,23 @@ async function main() {
   let stdinContent: string | null = null;
   let contextFilePath: string | undefined;
   let contextFileRaw: string | undefined;
-  const needsStdin = contextFromStdin || needsStdinForTask;
+  const needsStdin = contextFromStdin || needsStdinForTask || pipedContext;
   if (needsStdin) {
     stdinContent = (await readStdin()).trim();
   }
 
   // Handle context from stdin
-  if (contextFromStdin && stdinContent) {
+  if (contextFromStdin && !stdinContent) {
+    throw new Error('No context received on stdin.');
+  }
+  if ((contextFromStdin || pipedContext) && stdinContent) {
     contextFilePath = '-';
     contextFileRaw = stdinContent;
     // Append stdin content to context, clear contextFile so it's not read as a file
     effectiveOptions.context = effectiveOptions.context
       ? `${effectiveOptions.context}\n\n${stdinContent}`
       : stdinContent;
-    effectiveOptions.contextFile = undefined;
+    if (contextFromStdin) effectiveOptions.contextFile = undefined;
   }
 
   if (effectiveOptions.contextFile) {
@@ -1076,6 +1114,8 @@ async function main() {
     const fullPath = path.isAbsolute(resolvedPath) ? resolvedPath : path.resolve(cwd, resolvedPath);
     contextFilePath = fullPath;
     contextFileRaw = (await readTextIfExists(fullPath)) ?? undefined;
+    if (contextFileRaw === undefined) throw new Error(`Cannot read context file: ${fullPath}`);
+    if (!contextFileRaw.trim()) throw new Error(`Context file is empty: ${fullPath}`);
   }
 
   // Handle task from stdin
@@ -1089,7 +1129,7 @@ async function main() {
   // Background mode: launch as detached job and exit immediately
   if (effectiveOptions.background) {
     const { launchBackgroundJob } = await import('./jobs.js');
-    const { jobId, pid } = launchBackgroundJob(cwd, finalTask, process.argv.slice(2));
+    const { jobId, pid } = launchBackgroundJob(cwd, finalTask, process.argv.slice(2), stdinContent ?? undefined);
     console.log(`Job started: ${jobId}`);
     console.log(`PID: ${pid}`);
     console.log('');
@@ -1112,6 +1152,11 @@ async function main() {
       console.log(`Stack:        ${options.stack}`);
     }
     console.log(`Tools:        ${effectiveOptions.noTools ? 'disabled' : config.tools.enabled.join(', ')}`);
+    console.log(`Max tokens:   ${requestBody?.max_tokens ?? effectiveOptions.maxTokens ?? resolvedModel.maxTokens ?? 'provider default'}`);
+    console.log(`Timeout:      ${effectiveOptions.timeoutMs ? `${effectiveOptions.timeoutMs}ms` : 'none'}`);
+    const reasoning = requestBody?.reasoning as { effort?: string } | undefined;
+    if (reasoning?.effort) console.log(`Reasoning:    ${reasoning.effort}`);
+    if (contextFilePath) console.log(`Context:      ${contextFilePath} (${contextFileRaw?.length ?? 0} characters)`);
     console.log(`Task:         "${finalTask.length > 60 ? finalTask.slice(0, 60) + '...' : finalTask}"`);
     return;
   }
@@ -1301,7 +1346,7 @@ async function main() {
           unrestricted: effectiveOptions.unrestricted,
           timeoutMs: effectiveOptions.timeoutMs,
           maxTokens: effectiveOptions.maxTokens ?? resolvedModel.maxTokens,
-          requestBody: mergeRequestBodies(resolvedModel.request, effectiveOptions.request),
+          requestBody,
           contextLength: resolvedModel.contextLength,
           thinking: effectiveOptions.thinking,
           cacheControl: effectiveOptions.cacheControl,
@@ -1389,4 +1434,9 @@ async function main() {
 main().catch((error) => {
   console.error(formatError(error));
   process.exitCode = 1;
+}).finally(async () => {
+  if (process.env.KARL_JOB_ID) {
+    const { finishBackgroundJob } = await import('./jobs.js');
+    finishBackgroundJob(process.cwd(), process.env.KARL_JOB_ID, Number(process.exitCode ?? 0));
+  }
 });

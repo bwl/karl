@@ -12,16 +12,23 @@ progress, errors, receipts, history, and JSON output remain literal and
 operational.
 
 ```
-karl run [flags] <task> [task...]
+karl run [flags] <task>
 ```
 
 ## Model Selection
 
 | Flag | Description |
 |------|-------------|
-| `--fast`, `-f` | Smaller, faster model |
-| `--smart`, `-s` | Larger, more capable model |
-| `--model`, `-m` | Exact model ID |
+| `--model`, `-m` | Configured alias or exact model ID |
+| `--provider` | Explicit provider for the model, e.g. `openrouter` |
+| `--max-tokens` | Positive output-token budget, including reasoning |
+| `--reasoning-effort` | `low`, `medium`, or `high` for an OpenAI-compatible HTTP provider |
+| `--timeout` | Task deadline, e.g. `30m`, `2h`; `0` disables it |
+
+For 200k+ tokens of text, use `--context-file` or stdin rather than a shell
+argument. Piped text is context when a task is supplied, or the task itself
+when no task is supplied. See [long-context runs](long-context.md) for Argon,
+continuation budgets, and background examples.
 
 ## Model Commands
 

@@ -27,11 +27,20 @@ cat error.log | karl run "what went wrong?"
 git diff | karl run "write a commit message"
 ```
 
-### Parallel Tasks
+### Long context with Gemini 4 Argon
 
 ```bash
-karl run "analyze auth.go" "analyze db.go" "analyze api.go"
+karl models add argon --provider openrouter --model google/gemini-4-argon
+karl run --model argon --no-tools --reasoning-effort high \
+  --max-tokens 262144 --timeout 2h --context-file context.txt \
+  "Analyze all the supplied material and write a substantive, evidence-based report." \
+  > answer.md
 ```
+
+Context files and stdin are read in full. Argon's long responses can span
+multiple provider requests; Karl follows its continuation tokens within the
+chosen output budget. See [long-context runs](docs/long-context.md) for the
+reusable `deep-read` profile, background runs, and limits.
 
 ## Config Stacks
 

@@ -5,6 +5,9 @@
  * Handles streaming completions and tool execution for OpenAI-compatible APIs.
  */
 
+import { IncompleteResponseError, TaskRunError } from './errors.js';
+import { readSSE } from './sse.js';
+
 // ============================================================================
 // Types
 // ============================================================================
@@ -15,6 +18,7 @@ export interface Message {
   tool_calls?: ToolCall[];
   tool_call_id?: string;
   name?: string;
+  reasoning_details?: Record<string, unknown>[];
 }
 
 export interface ToolCall {
@@ -84,6 +88,7 @@ type StreamChunk =
   | { type: 'thinking_delta'; delta: string }    // Anthropic extended thinking
   | { type: 'tool_call'; toolCall: ToolCall }
   | { type: 'usage'; usage: TokenUsage }
+  | { type: 'reasoning_details'; details: Record<string, unknown>[] }
   | { type: 'error'; error: string };
 
 // ============================================================================
@@ -258,6 +263,7 @@ export async function* agentLoop(
     let fullThinking = '';
     let toolCalls: ToolCall[] = [];
     let turnUsage: TokenUsage = {};
+    let reasoningDetails: Record<string, unknown>[] | undefined;
 
     // Select stream function based on provider type
     const streamFn = config.providerType === 'anthropic'
@@ -278,18 +284,28 @@ export async function* agentLoop(
           yield { type: 'tool_call_start', toolCall: chunk.toolCall };
           yield { type: 'tool_call_end', toolCall: chunk.toolCall };
         } else if (chunk.type === 'usage') {
-          turnUsage = chunk.usage;
+          for (const key of ['input', 'output', 'total', 'cost'] as const) {
+            if (chunk.usage[key] !== undefined) turnUsage[key] = (turnUsage[key] ?? 0) + chunk.usage[key]!;
+          }
           // Accumulate usage
           accumulatedUsage.input = (accumulatedUsage.input ?? 0) + (chunk.usage.input ?? 0);
           accumulatedUsage.output = (accumulatedUsage.output ?? 0) + (chunk.usage.output ?? 0);
           accumulatedUsage.total = (accumulatedUsage.total ?? 0) + (chunk.usage.total ?? 0);
+          accumulatedUsage.cost = (accumulatedUsage.cost ?? 0) + (chunk.usage.cost ?? 0);
+        } else if (chunk.type === 'reasoning_details') {
+          reasoningDetails = chunk.details;
         } else if (chunk.type === 'error') {
           throw new Error(chunk.error);
         }
       }
     } catch (error) {
-      yield { type: 'error', error: error as Error };
-      throw error;
+      const failure = new TaskRunError((error as Error).message, {
+        retryable: fullText || accumulatedUsage.output ? false : (error as { retryable?: boolean }).retryable,
+        partialResult: fullText || undefined,
+        tokens: accumulatedUsage,
+      });
+      yield { type: 'error', error: failure };
+      throw failure;
     }
 
     if (fullThinking) {
@@ -301,11 +317,11 @@ export async function* agentLoop(
     }
 
     // Build assistant message
-    // Note: When there are tool calls, content should be empty or null per OpenAI spec
     const assistantMessage: Message = {
       role: 'assistant',
-      content: toolCalls.length > 0 ? '' : fullText,
-      tool_calls: toolCalls.length > 0 ? toolCalls : undefined
+      content: fullText,
+      tool_calls: toolCalls.length > 0 ? toolCalls : undefined,
+      reasoning_details: reasoningDetails,
     };
     messages.push(assistantMessage);
 
@@ -494,6 +510,65 @@ async function* streamOpenAI(
 
   applyOpenAIRequestBody(body, config.requestBody);
 
+  const originalMessages = body.messages;
+  let outputTokens = 0;
+  let hasText = false;
+  const maxContinuationHops = 32;
+
+  for (let hop = 0; ; hop++) {
+    config.signal?.throwIfAborted();
+    const response = yield* streamOpenAIRequest(body, config);
+    outputTokens += response.usage?.output ?? 0;
+    hasText ||= response.hasText;
+
+    if (response.finishReason === 'length') {
+      const continuation = response.continuation;
+      // Gemini's budget is cumulative across hops. Never increase it implicitly.
+      if (response.nativeFinishReason !== 'CONTINUATION' || !continuation) {
+        throw new IncompleteResponseError('Response reached its output limit before completing. Increase --max-tokens and run again.');
+      }
+      if (!Number.isSafeInteger(body.max_tokens) || body.max_tokens <= outputTokens) {
+        throw new IncompleteResponseError('Continuation requires remaining output budget. Increase --max-tokens and run again.');
+      }
+      if (hop >= maxContinuationHops) {
+        throw new IncompleteResponseError(`Stopped after ${maxContinuationHops} continuation hops without a complete answer.`);
+      }
+      // Only the latest opaque checkpoint is needed. Earlier conversation and
+      // all request parameters remain identical, including the total budget.
+      body.messages = [...originalMessages, {
+        role: 'assistant', content: '', reasoning_details: [continuation],
+      }];
+      continue;
+    }
+
+    if (response.finishReason !== 'stop' && response.finishReason !== 'tool_calls') {
+      throw new IncompleteResponseError(`Provider stopped without completing the answer (${response.finishReason}).`);
+    }
+    if (!hasText && response.toolCalls.length === 0) {
+      throw new IncompleteResponseError('Provider returned no answer or tool calls.');
+    }
+    if (response.reasoningDetails.length) {
+      yield { type: 'reasoning_details', details: response.reasoningDetails };
+    }
+    for (const toolCall of response.toolCalls) yield { type: 'tool_call', toolCall };
+    return;
+  }
+}
+
+interface OpenAIResponse {
+  finishReason: string;
+  nativeFinishReason?: string;
+  continuation?: Record<string, unknown>;
+  reasoningDetails: Record<string, unknown>[];
+  toolCalls: ToolCall[];
+  usage?: TokenUsage;
+  hasText: boolean;
+}
+
+async function* streamOpenAIRequest(
+  body: Record<string, any>,
+  config: AgentLoopConfig
+): AsyncGenerator<StreamChunk, OpenAIResponse> {
   const response = await fetch(`${config.baseUrl}/chat/completions`, {
     method: 'POST',
     headers: {
@@ -506,113 +581,106 @@ async function* streamOpenAI(
 
   if (!response.ok) {
     const errorText = await response.text();
-    yield { type: 'error', error: formatProviderError('API error', response.status, errorText) };
-    return;
+    throw new Error(formatProviderError('API error', response.status, errorText));
   }
 
   if (!response.body) {
-    yield { type: 'error', error: 'No response body' };
-    return;
+    throw new IncompleteResponseError('No response body');
   }
 
-  // Parse SSE stream
-  const reader = response.body.getReader();
-  const decoder = new TextDecoder();
-  let buffer = '';
-
-  // Track tool calls being built (indexed by position)
   const toolCallsInProgress: Map<number, { id: string; name: string; args: string }> = new Map();
+  const reasoningDetails = new Map<number, Record<string, unknown>>();
+  let continuation: Record<string, unknown> | undefined;
+  let finishReason: string | undefined;
+  let nativeFinishReason: string | undefined;
+  let usage: TokenUsage | undefined;
+  let hasText = false;
 
   try {
-    while (true) {
-      const { done, value } = await reader.read();
-      if (done) break;
-
-      buffer += decoder.decode(value, { stream: true });
-      const lines = buffer.split('\n');
-      buffer = lines.pop() || '';
-
-      for (const line of lines) {
-        const trimmed = line.trim();
-        if (!trimmed || !trimmed.startsWith('data:')) continue;
-
-        const data = trimmed.startsWith('data: ') ? trimmed.slice(6) : trimmed.slice(5);
-        if (data === '[DONE]') continue;
-
-        try {
-          const chunk = JSON.parse(data);
-          if (chunk.error) {
-            yield { type: 'error', error: formatProviderErrorPayload('Provider stream error', chunk.error) };
-            return;
+    for await (const data of readSSE(response.body)) {
+      if (data.trim() === '[DONE]') break;
+      let chunk: any;
+      try {
+        chunk = JSON.parse(data);
+      } catch {
+        throw new IncompleteResponseError('Provider sent malformed stream data; the answer may be incomplete.');
+      }
+      if (chunk.error) {
+        throw new IncompleteResponseError(formatProviderErrorPayload('Provider stream error', chunk.error));
+      }
+      const choice = chunk.choices?.[0];
+      const delta = choice?.delta;
+      if (typeof delta?.content === 'string' && delta.content) {
+        hasText ||= !!delta.content.trim();
+        yield { type: 'text_delta', delta: delta.content };
+      }
+      for (const detail of delta?.reasoning_details ?? []) {
+        if (!isRecord(detail)) continue;
+        if (detail.id === 'gemini-continuation') {
+          if (detail.type === 'reasoning.encrypted' && typeof detail.data === 'string' && detail.data) {
+            continuation = { ...detail };
           }
-
-          const choice = chunk.choices?.[0];
-          const delta = choice?.delta;
-
-          // Text content
-          if (delta?.content) {
-            yield { type: 'text_delta', delta: delta.content };
-          }
-
-          // Tool calls (streamed incrementally)
-          if (delta?.tool_calls) {
-            for (const tc of delta.tool_calls) {
-              const index = tc.index ?? 0;
-
-              if (tc.id) {
-                // New tool call starting
-                toolCallsInProgress.set(index, {
-                  id: tc.id,
-                  name: tc.function?.name || '',
-                  args: tc.function?.arguments || ''
-                });
-              } else if (toolCallsInProgress.has(index)) {
-                // Continuing existing tool call
-                const existing = toolCallsInProgress.get(index)!;
-                if (tc.function?.name) existing.name += tc.function.name;
-                if (tc.function?.arguments) existing.args += tc.function.arguments;
-              }
-            }
-          }
-
-          // Emit completed tool calls when finish_reason indicates
-          const finishReason = choice?.finish_reason;
-          if (finishReason === 'tool_calls' || finishReason === 'stop') {
-            // Emit any accumulated tool calls
-            for (const [_, tc] of toolCallsInProgress) {
-              if (tc.id && tc.name) {
-                yield {
-                  type: 'tool_call',
-                  toolCall: {
-                    id: tc.id,
-                    type: 'function',
-                    function: { name: tc.name, arguments: tc.args || '{}' }
-                  }
-                };
-              }
-            }
-            toolCallsInProgress.clear();
-          }
-
-          // Usage info (usually in final chunk)
-          if (chunk.usage) {
-            yield {
-              type: 'usage',
-              usage: {
-                input: chunk.usage.prompt_tokens,
-                output: chunk.usage.completion_tokens,
-                total: chunk.usage.total_tokens
-              }
-            };
-          }
-        } catch {
-          // Ignore JSON parse errors in stream (partial data)
+          continue;
         }
+        const index = typeof detail.index === 'number' ? detail.index : reasoningDetails.size;
+        const previous = reasoningDetails.get(index);
+        const merged = { ...previous, ...detail };
+        // OpenRouter streams ordinary reasoning/signatures incrementally by index.
+        for (const key of ['text', 'data', 'signature', 'summary']) {
+          if (typeof previous?.[key] === 'string' && typeof detail[key] === 'string') {
+            merged[key] = previous[key] + detail[key];
+          }
+        }
+        reasoningDetails.set(index, merged);
+      }
+      for (const tc of delta?.tool_calls ?? []) {
+        const index = tc.index ?? 0;
+        const existing = toolCallsInProgress.get(index) ?? { id: '', name: '', args: '' };
+        if (tc.id) existing.id = tc.id;
+        if (tc.function?.name) existing.name += tc.function.name;
+        if (tc.function?.arguments) existing.args += tc.function.arguments;
+        toolCallsInProgress.set(index, existing);
+      }
+      if (choice?.finish_reason) finishReason = choice.finish_reason;
+      if (choice?.native_finish_reason) nativeFinishReason = choice.native_finish_reason;
+      if (chunk.usage) {
+        // Some providers repeat usage. The last frame describes this request.
+        usage = {
+          input: chunk.usage.prompt_tokens,
+          output: chunk.usage.completion_tokens,
+          total: chunk.usage.total_tokens,
+          cost: typeof chunk.usage.cost === 'number' ? chunk.usage.cost : undefined,
+        };
       }
     }
-  } finally {
-    reader.releaseLock();
+  } catch (error) {
+    if (usage) yield { type: 'usage', usage };
+    if (config.signal?.aborted) throw error;
+    if (error instanceof IncompleteResponseError) throw error;
+    throw new IncompleteResponseError(`Provider stream interrupted: ${(error as Error).message}`);
   }
+  if (usage) yield { type: 'usage', usage };
+  if (!finishReason) {
+    throw new IncompleteResponseError('Provider stream ended without a finish reason; the answer is incomplete.');
+  }
+  const toolCalls: ToolCall[] = [];
+  for (const tc of toolCallsInProgress.values()) {
+    if (finishReason === 'tool_calls' || finishReason === 'stop') {
+      if (!tc.id || !tc.name) throw new IncompleteResponseError('Provider returned an incomplete tool call.');
+      try {
+        JSON.parse(tc.args || '{}');
+      } catch {
+        throw new IncompleteResponseError('Provider returned incomplete tool arguments.');
+      }
+      toolCalls.push({
+        id: tc.id, type: 'function', function: { name: tc.name, arguments: tc.args || '{}' },
+      });
+    }
+  }
+  return {
+    finishReason, nativeFinishReason, continuation, usage, hasText, toolCalls,
+    reasoningDetails: [...reasoningDetails.values()],
+  };
 }
 
 /**
@@ -632,9 +700,9 @@ function formatMessagesForOpenAI(messages: Message[]): any[] {
       role: m.role
     };
 
-    // When there are tool calls, content should be null (not empty string)
+    // Preserve any accompanying text; use null for a content-free tool call.
     if (m.tool_calls && m.tool_calls.length > 0) {
-      formatted.content = null;
+      formatted.content = m.content || null;
       formatted.tool_calls = m.tool_calls.map(tc => ({
         id: tc.id,
         type: 'function',
@@ -646,6 +714,8 @@ function formatMessagesForOpenAI(messages: Message[]): any[] {
     } else {
       formatted.content = m.content;
     }
+
+    if (m.reasoning_details?.length) formatted.reasoning_details = m.reasoning_details;
 
     return formatted;
   });

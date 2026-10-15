@@ -114,6 +114,26 @@ export function mergeRequestBodies(
 export function resolveModel(config: KarlConfig, options: CliOptions): ResolvedModel {
   let modelKey = config.defaultModel;
 
+  if (options.provider) {
+    const providerConfig = config.providers[options.provider];
+    if (!providerConfig) {
+      throw new Error(`Provider not found: ${options.provider}`);
+    }
+    const requested = options.model ?? modelKey;
+    if (!requested) throw new Error('Specify --model with --provider.');
+    const modelConfig = config.models[requested];
+    const metadata = modelConfig?.provider === options.provider ? modelConfig : undefined;
+    return {
+      model: modelConfig?.model ?? requested,
+      providerKey: options.provider,
+      providerConfig,
+      modelKey: requested,
+      request: metadata?.request,
+      maxTokens: metadata?.maxTokens,
+      contextLength: metadata?.contextLength,
+    };
+  }
+
   if (options.model) {
     if (config.models[options.model]) {
       modelKey = options.model;
@@ -130,10 +150,7 @@ export function resolveModel(config: KarlConfig, options: CliOptions): ResolvedM
         model: options.model,
         providerKey: fallbackModel.provider,
         providerConfig,
-        modelKey,
-        request: fallbackModel.request,
-        maxTokens: fallbackModel.maxTokens,
-        contextLength: fallbackModel.contextLength,
+        modelKey: options.model,
       };
     }
   }

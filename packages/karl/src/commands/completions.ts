@@ -44,6 +44,7 @@ const SUBCOMMANDS: Record<string, string[]> = {
 // Flags for run command (and stack-as-verb)
 const RUN_FLAGS = [
   '--model', '-m',
+  '--provider', '--max-tokens', '--reasoning-effort',
   '--verbose', '-v', '--stream', '--progress',
   '--trace',
   '--json', '-j',
@@ -239,6 +240,9 @@ _karl() {
         '-j[JSON output]'
         '--stats[Print summary stats]'
         '--timeout[Per-task timeout]:timeout:'
+        '--provider[Provider for an exact model ID]:provider:'
+        '--max-tokens[Output budget including reasoning]:tokens:'
+        '--reasoning-effort[Reasoning effort]:effort:(low medium high)'
         '--skill[Load a skill by name]:skill:->skills'
         '--no-tools[Disable tool use]'
         '--pure[Disable tool use]'
@@ -549,6 +553,9 @@ set -l run_cmds run ask do execute exec continue cont followup follow-up chain
 
 # Flags for run commands
 complete -c karl -n "__fish_seen_subcommand_from $run_cmds; or __fish_seen_subcommand_from (__karl_stacks)" -l model -s m -d "Model alias" -xa "(__karl_models)"
+complete -c karl -n "__fish_seen_subcommand_from $run_cmds; or __fish_seen_subcommand_from (__karl_stacks)" -l provider -d "Provider for an exact model ID" -r
+complete -c karl -n "__fish_seen_subcommand_from $run_cmds; or __fish_seen_subcommand_from (__karl_stacks)" -l max-tokens -d "Output budget including reasoning" -r
+complete -c karl -n "__fish_seen_subcommand_from $run_cmds; or __fish_seen_subcommand_from (__karl_stacks)" -l reasoning-effort -d "Reasoning effort" -xa "low medium high"
 complete -c karl -n "__fish_seen_subcommand_from $run_cmds; or __fish_seen_subcommand_from (__karl_stacks)" -l verbose -s v -d "Stream bounded tool progress"
 complete -c karl -n "__fish_seen_subcommand_from $run_cmds; or __fish_seen_subcommand_from (__karl_stacks)" -l trace -d "Show bounded trace guidance"
 complete -c karl -n "__fish_seen_subcommand_from $run_cmds; or __fish_seen_subcommand_from (__karl_stacks)" -l stream -d "Stream output"

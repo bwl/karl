@@ -154,6 +154,9 @@ be Fusion rather than one of Karl's local tools.
 
 ## Context Loading
 
+For Gemini 4 Argon and 200k+ token inputs, see [long-context runs](long-context.md)
+and the [deep-read stack](../packages/karl/examples/stacks/deep-read.json).
+
 Automatic project context from:
 - `CLAUDE.md`, `AGENTS.md`, `COPILOT.md`
 - `.cursorrules`, `.github/copilot-instructions.md`

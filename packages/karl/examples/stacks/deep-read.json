@@ -1,0 +1,13 @@
+{
+  "model": "argon",
+  "noTools": true,
+  "timeout": 7200000,
+  "maxTokens": 262144,
+  "request": {
+    "reasoning": {
+      "effort": "high",
+      "exclude": true
+    }
+  },
+  "context": "Read all supplied material carefully. Produce a substantive answer to the user's task, grounded in the supplied evidence. Cite source names or section identifiers when available. Reconcile contradictions, distinguish evidence from inference, and explain consequential uncertainties. Use as much detail as the task warrants; do not replace analysis with a short summary."
+}

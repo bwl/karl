@@ -197,6 +197,7 @@ async function runCodexTurn(
 
 export async function runTask(params: RunTaskParams): Promise<TaskResult> {
   const toolsUsed = new Set<string>();
+  let partialText = '';
   const onEvent = (event: SchedulerEvent) => {
     if (event.type === 'tool_start' || event.type === 'tool_end') {
       toolsUsed.add(event.tool);
@@ -326,7 +327,11 @@ export async function runTask(params: RunTaskParams): Promise<TaskResult> {
         params.onAgentEvent?.(agentEvent);
 
         switch (agentEvent.type) {
+          case 'stream_start':
+            partialText = '';
+            break;
           case 'text_delta':
+            partialText += agentEvent.delta;
             // Emit text as it streams (for thinking display)
             onEvent({
               type: 'thinking',
@@ -421,9 +426,11 @@ export async function runTask(params: RunTaskParams): Promise<TaskResult> {
     });
 
     throw new TaskRunError(message, {
-      retryable: (error as { retryable?: boolean }).retryable,
+      retryable: partialText ? false : (error as { retryable?: boolean }).retryable,
       toolsUsed: Array.from(toolsUsed),
-      durationMs
+      durationMs,
+      partialResult: (error as TaskRunError).partialResult ?? (partialText || undefined),
+      tokens: (error as TaskRunError).tokens,
     });
   }
 }

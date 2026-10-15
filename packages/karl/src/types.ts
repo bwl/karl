@@ -126,6 +126,8 @@ export interface KarlConfig {
 
 export interface CliOptions {
   model?: string;
+  provider?: string;          // Explicit provider for raw model IDs
+  reasoningEffort?: 'low' | 'medium' | 'high';
   verbose?: boolean;
   trace?: boolean;
   json?: boolean;

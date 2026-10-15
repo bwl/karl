@@ -15,7 +15,7 @@ export function formatError(err: unknown): string {
 
 export function parseDurationMs(dur: string): number {
   const timeUnits = { ms: 1, s: 1000, m: 60000, h: 3600000 };
-  const match = dur.match(/^([0-9.]+)(ms|s|m|h)?$/i);
+  const match = dur.match(/^(\d+(?:\.\d+)?)(ms|s|m|h)?$/i);
   if (!match) throw new Error(`Invalid duration: ${dur}`);
   const value = parseFloat(match[1]);
   const unit = match[2]?.toLowerCase() || 's';

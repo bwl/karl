@@ -759,7 +759,7 @@ async function testConfig() {
     assert(report.ok, JSON.stringify(report.diagnostics));
     assertEqual(report.schemaVersion, 1);
     assertEqual(report.effective.defaultModel, 'test');
-    assertEqual(report.effective.providers[0].auth.ready, true);
+    assertEqual(report.effective.providers.find(provider => provider.name === 'local')?.auth.ready, true);
     assertEqual(Object.keys(report).join(','), 'schemaVersion,ok,sources,effective,sandbox,diagnostics,summary');
   });
 

@@ -6,7 +6,8 @@
     "karl": "./dist/karl"
   },
   "scripts": {
-    "test": "bun run scripts/test-all.ts",
+    "test": "bun run scripts/test-all.ts && bun run test:long-context",
+    "test:long-context": "bun test scripts/long-context.test.ts",
     "test-skills": "bun run scripts/test-skills.ts",
     "build": "bun build src/cli.ts --target bun --outfile dist/karl --external @opentui/core",
     "typecheck": "tsc --noEmit"

@@ -3,8 +3,8 @@
  * Tracks running tasks, their PIDs, output logs, and status
  */
 
-import { spawn, type ChildProcess } from 'child_process';
-import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync, unlinkSync, createWriteStream } from 'fs';
+import { spawn } from 'child_process';
+import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync, openSync, closeSync } from 'fs';
 import { join } from 'path';
 
 export interface JobMeta {
@@ -46,7 +46,8 @@ function generateJobId(): string {
 export function launchBackgroundJob(
   cwd: string,
   task: string,
-  args: string[]
+  args: string[],
+  stdin?: string
 ): { jobId: string; pid: number } {
   const jobsDir = ensureJobsDir(cwd);
   const jobId = generateJobId();
@@ -56,54 +57,85 @@ export function launchBackgroundJob(
   const outputPath = join(jobDir, 'output.log');
   const metaPath = join(jobDir, 'meta.json');
 
-  // Create output file stream
-  const outputStream = createWriteStream(outputPath, { flags: 'a' });
-
   // Build the command - re-run karl without --background
   const karlPath = process.argv[1];
-  const filteredArgs = args.filter(a => a !== '--background' && a !== '-bg');
+  const filteredArgs: string[] = [];
+  const valueFlags = new Set([
+    '--model', '-m', '--provider', '--max-tokens', '--reasoning-effort', '--timeout',
+    '--skill', '--context', '--context-file', '--parent', '--follow-up', '--followup',
+    '--chain', '--tag', '--visuals', '--stack',
+  ]);
+  let positionalOnly = false;
+  let nextIsValue = false;
+  for (const arg of args) {
+    if (nextIsValue) {
+      filteredArgs.push(arg);
+      nextIsValue = false;
+      continue;
+    }
+    if (arg === '--') positionalOnly = true;
+    const flag = arg.split('=')[0];
+    if (!positionalOnly && ['--background', '-bg', '--bg', '--detach'].includes(flag)) continue;
+    filteredArgs.push(arg);
+    nextIsValue = !positionalOnly && valueFlags.has(arg);
+  }
+
+  // Persist stdin in the job directory, not argv (large inputs exceed OS limits).
+  const inputPath = join(jobDir, 'stdin.txt');
+  if (stdin !== undefined) writeFileSync(inputPath, stdin, { mode: 0o600 });
+  const inputFd = stdin === undefined ? undefined : openSync(inputPath, 'r');
+  const outputFd = openSync(outputPath, 'a', 0o600);
+  const compiled = karlPath === process.execPath || karlPath?.startsWith('/$bunfs/');
 
   // Spawn karl as detached process
-  const child = spawn(process.execPath, [karlPath, ...filteredArgs], {
-    cwd,
-    detached: true,
-    stdio: ['ignore', outputStream, outputStream],
-    env: { ...process.env, KARL_JOB_ID: jobId }
-  });
+  let child;
+  try {
+    child = spawn(process.execPath, compiled ? filteredArgs : [karlPath, ...filteredArgs], {
+      cwd,
+      detached: true,
+      stdio: [inputFd ?? 'ignore', outputFd, outputFd],
+      env: { ...process.env, KARL_JOB_ID: jobId }
+    });
+  } finally {
+    if (inputFd !== undefined) closeSync(inputFd);
+    closeSync(outputFd);
+  }
 
   // Write initial metadata
   const meta: JobMeta = {
     id: jobId,
-    pid: child.pid!,
+    pid: child.pid ?? 0,
     task: task.length > 200 ? task.slice(0, 200) + '...' : task,
     command: `karl ${filteredArgs.join(' ')}`,
     cwd,
     startedAt: new Date().toISOString(),
-    status: 'running'
+    status: child.pid ? 'running' : 'error'
   };
   writeFileSync(metaPath, JSON.stringify(meta, null, 2) + '\n');
 
-  // Monitor for completion
-  child.on('exit', (code) => {
-    try {
-      const updatedMeta: JobMeta = {
-        ...meta,
-        status: code === 0 ? 'completed' : 'error',
-        exitCode: code ?? undefined,
-        completedAt: new Date().toISOString()
-      };
-      writeFileSync(metaPath, JSON.stringify(updatedMeta, null, 2) + '\n');
-    } catch {
-      // Ignore errors writing final status
-    }
-    outputStream.close();
-  });
+  child.on('error', () => finishBackgroundJob(cwd, jobId, 1));
 
-  // Unref so parent can exit
+  // The child records completion itself after the launching process exits.
   child.unref();
-  (outputStream as any).unref?.();
 
-  return { jobId, pid: child.pid! };
+  if (!child.pid) throw new Error(`Could not start background job ${jobId}`);
+  return { jobId, pid: child.pid };
+}
+
+export function finishBackgroundJob(cwd: string, jobId: string, exitCode: number): void {
+  if (!/^job_[a-zA-Z0-9_]+$/.test(jobId)) return;
+  const metaPath = join(getJobsDir(cwd), jobId, 'meta.json');
+  try {
+    const meta = JSON.parse(readFileSync(metaPath, 'utf-8')) as JobMeta;
+    // A nested Karl command can inherit KARL_JOB_ID; only the worker owns it.
+    if (meta.pid && meta.pid !== process.pid) return;
+    writeFileSync(metaPath, JSON.stringify({
+      ...meta, status: exitCode === 0 ? 'completed' : 'error', exitCode,
+      completedAt: new Date().toISOString(),
+    }, null, 2) + '\n');
+  } catch {
+    // A missing/unwritable job receipt must not replace the task's result.
+  }
 }
 
 export function listJobs(cwd: string): JobInfo[] {
